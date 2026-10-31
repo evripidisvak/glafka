@@ -1,4 +1,5 @@
-/target
-/_build
-**/*.rs.bk
-/.grammata/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+/_build/
+/.glafka/

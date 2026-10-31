@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Glafka
+Comment=Lightweight GNOME ebook library manager
+Type=Application
+Exec=@bindir@/glafka
+Terminal=false
+Categories=Office;Viewer;GTK;GNOME;
+Icon=io.github.evripidisvak.Glafka
+StartupNotify=true

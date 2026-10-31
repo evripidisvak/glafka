@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.evripidisvak.Glafka</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Glafka</name>
+  <summary>A lightweight GNOME-native ebook library manager</summary>
+  <description>
+    <p>Glafka keeps your ebooks in one tidy library on your computer and gets them onto your e-reader, by USB or by email. It needs no Calibre, but can import a Calibre library.</p>
+    <ul>
+      <li>Import EPUB and PDF files, whole folders, or a Calibre library</li>
+      <li>Browse by author, series and tag; edit details and covers</li>
+      <li>Copy books to a USB e-reader or email them, and see which are on it</li>
+    </ul>
+  </description>
+  <url type="homepage">https://github.com/evripidisvak/glafka</url>
+  <url type="bugtracker">https://github.com/evripidisvak/glafka/issues</url>
+  <launchable type="desktop-id">io.github.evripidisvak.Glafka.desktop</launchable>
+  <developer id="io.github.evripidisvak">
+    <name>Evripidis Vakalis</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <branding>
+    <color type="primary" scheme_preference="light">#99c1f1</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
+  <releases>
+    <release version="0.1.0" date="2026-10-31"/>
+  </releases>
+</component>

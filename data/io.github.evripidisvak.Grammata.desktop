@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=Grammata
-Comment=Lightweight GNOME ebook library manager
-Type=Application
-Exec=grammata
-Terminal=false
-Categories=Office;Viewer;GTK;GNOME;
-Icon=io.github.evripidisvak.Grammata
-StartupNotify=true
