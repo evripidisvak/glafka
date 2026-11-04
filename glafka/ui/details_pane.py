@@ -84,6 +84,13 @@ class DetailsPane:
         self._status_rows: list[Adw.ActionRow] = []
         content.append(self._status_group)
 
+        # This book's history, folded; see set_history
+        self._history_group = Adw.PreferencesGroup(visible=False)
+        self._history_row = Adw.ExpanderRow(title="History")
+        self._history_group.add(self._history_row)
+        self._history_children: list[Adw.ActionRow] = []
+        content.append(self._history_group)
+
         meta_group = Adw.PreferencesGroup(title="Metadata")
         self.title_entry = Adw.EntryRow(title="Title")
         self.author_entry = Adw.EntryRow(title="Author")
@@ -206,6 +213,21 @@ class DetailsPane:
             self._status_group.add(row)
             self._status_rows.append(row)
         self._status_group.set_visible(bool(rows))
+
+    def set_history(self, rows: list[tuple[str, str, str]]) -> None:
+        """(what happened, when, icon), newest first."""
+        for row in self._history_children:
+            self._history_row.remove(row)
+        self._history_children.clear()
+        for title, subtitle, icon in rows:
+            row = Adw.ActionRow(title=title, subtitle=subtitle, use_markup=False)
+            row.add_prefix(Gtk.Image(icon_name=icon))
+            self._history_row.add_row(row)
+            self._history_children.append(row)
+        if rows:
+            latest, when, _icon = rows[0]
+            self._history_row.set_subtitle(f"Last: {latest}, {when}")
+        self._history_group.set_visible(bool(rows))
 
     def _reader_action(self, destination_id: str, action: str) -> None:
         if self.current_book is not None:

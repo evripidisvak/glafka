@@ -5,7 +5,15 @@ import pytest
 
 from glafka.core.db import MIGRATIONS, SCHEMA_VERSION, Database
 from glafka.core.errors import GlafkaError, NotFoundError
-from glafka.core.models import Book, BookFile, BookFilter, BookSort, Destination, DeviceCopy
+from glafka.core.models import (
+    Book,
+    BookFile,
+    BookFilter,
+    BookSort,
+    Destination,
+    DeviceCopy,
+    HistoryAction,
+)
 
 
 def test_db_roundtrip():
@@ -320,10 +328,50 @@ def test_v8_keeps_history_and_cascades_reader_contents(tmp_path):
 
     db = Database.open(path, tmp_path)
 
-    [record] = db.sends_for_book("b")
-    assert (record.target_name, record.destination_id, record.sha256) == ("PocketBook", None, None)
+    [entry] = db.history("b")
+    assert (entry.destination_name, entry.destination_id, entry.sha256) == (
+        "PocketBook",
+        None,
+        None,
+    )
     assert db.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     db.add_device_copy(DeviceCopy("d", "b", "Books/Simmons, Dan/Hyperion - Dan Simmons.epub"))
     assert db.books_on_readers() == {"b"}
     db.delete_destination("d")
     assert db.books_on_readers() == set()
+
+
+def test_v9_history_keeps_old_entries_and_outlives_deleted_books(tmp_path):
+    path = tmp_path / "library.db"
+    conn = _db_at_version(path, 8)
+    conn.executescript(
+        "INSERT INTO books (id, title, author, created_at, updated_at) "
+        "VALUES ('b', 'Hyperion', 'Dan Simmons', '2026', '2026');"
+        "INSERT INTO destinations (id, name, kind, books_folder, formats, created_at) "
+        "VALUES ('d', 'Era Lite', 'usb', 'Books', 'epub', '2026');"
+        "INSERT INTO sent_history VALUES ('s1', 'b', 'usb', 'Era Lite', 'epub', "
+        "'2026-10-31T18:00:00+00:00', 'sent', 'd', 'abc', 10);"
+        "INSERT INTO sent_history VALUES ('s2', 'b', 'email', 'SendToPB', 'epub', "
+        "'2026-10-31T17:00:00+00:00', 'sent', NULL, NULL, NULL);"  # a send from before v8
+    )
+    conn.close()
+
+    db = Database.open(path, tmp_path)
+
+    tables = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "history" in tables and "sent_history" not in tables
+    newest, oldest = db.history("b")
+    assert (newest.book_title, newest.destination_name, newest.action) == (
+        "Hyperion",
+        "Era Lite",
+        HistoryAction.SENT,
+    )
+    assert (oldest.destination_kind, oldest.destination_name, oldest.destination_id) == (
+        "email",
+        "SendToPB",
+        None,
+    )
+    db.delete_destination("d")
+    db.delete_book("b")
+    kept = db.history()
+    assert [(e.book_id, e.book_title) for e in kept] == [(None, "Hyperion"), (None, "Hyperion")]

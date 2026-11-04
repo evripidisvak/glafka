@@ -1,12 +1,13 @@
 # Glafka: Plan
 
-Spec: `SPEC.md`. Updated 2026-10-31.
+Spec: `SPEC.md`. Updated 2026-11-04.
 
 ## Working agreement
 - We build it together: Claude writes code in small, reviewable steps; Evripidis reviews, tests in GNOME Builder, steers.
 - Bugs get a failing test first, then the fix.
 - Done means: `pytest` green, `ruff check` clean, runs from GNOME Builder.
-- Work on `main`; one commit at the end of each work day.
+- New work happens on a `feature/<name>` branch; one commit at the end of each work day. `main` only gets released versions, which is what installs follow (`git pull`, `meson install -C _build`).
+- Release: on the branch, bump the version in `meson.build`, `glafka/__init__.py`, a `<release>` in the metainfo and the README; commit; `git merge --ff-only` into `main`; tag `vX.Y.Z`; push `main` and the tag; delete the branch.
 
 ## Status
 
@@ -79,6 +80,7 @@ Spec: `SPEC.md`. Updated 2026-10-31.
 - [x] Destinations (ways to send to a reader): table `readers` (schema v5, stored per library), renamed `destinations` in v7 along with the code (`Reader` → `Destination`, `ui/readers.py` → `ui/drives.py`). Preferences → Sending page: "Send Books To" (Add USB Drive, Add Email Address, edit name/folder/address/formats, remove) and Email Account.
 - [x] USB: `ui/drives.py` (`Gio.VolumeMonitor`, matched by volume UUID); `core/send.py` (Calibre layout, FAT-safe names, `.part` + fsync, identical/different copy checks, free space); Send button under the cover; Replace and Eject toasts.
 - [x] Sent history (sent or found identical). Its "Sent to Reader" category became "On Reader" (what the last scan found).
+- [x] History (decisions 2026-11-04: page and per book, Glafka's own actions only, kept for deleted books, Recently Added icon now `document-new-symbolic`): schema v9 `history` (from `sent_history`; book title and author kept, `book_id` set to NULL when the book is deleted), `core/history.py` records copies, emails, already-there, deletes from the reader and marks; `ui/history_view.py` (day sections, filter, search); details pane History row.
 - [x] Email: SMTP (Gmail preset + custom server), app password in the keyring (libsecret). Outlook dropped: OAuth2 only (decision 2026-10-31).
   - `core/mail.py` (smtplib, CRLF message, server SIZE limit checked before login), `ui/secrets.py` (async libsecret), schema v6 (`email` column), Preferences: Email Account group and Add Email Address.
   - First real send 2026-10-31 (9.2 MB EPUB): arrived in `SendToPb/` under Glafka's file name, identical to the library file. Still unseen: non-ASCII titles (RFC 2231 encoded names).

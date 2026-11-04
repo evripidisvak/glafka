@@ -11,7 +11,8 @@ from glafka.core.models import (
     BookSort,
     Destination,
     DeviceCopy,
-    SentRecord,
+    HistoryAction,
+    HistoryEntry,
     utc_now,
 )
 
@@ -178,6 +179,31 @@ CREATE TABLE on_device (
 CREATE INDEX idx_on_device_book_id ON on_device(book_id);
 """
 
+# v9: sent_history becomes history: more actions, and it outlives deleted books
+_SCHEMA_V9 = """
+CREATE TABLE history (
+    id TEXT PRIMARY KEY,
+    book_id TEXT REFERENCES books(id) ON DELETE SET NULL,
+    book_title TEXT NOT NULL,
+    book_author TEXT NOT NULL,
+    action TEXT NOT NULL,
+    destination_id TEXT,
+    destination_kind TEXT NOT NULL,
+    destination_name TEXT NOT NULL,
+    format TEXT,
+    at TEXT NOT NULL,
+    sha256 TEXT,
+    file_size INTEGER
+);
+INSERT INTO history SELECT sh.id, sh.book_id, COALESCE(b.title, ''), COALESCE(b.author, ''),
+    sh.status, sh.destination_id, sh.target_type, sh.target_name, sh.format, sh.sent_at,
+    sh.sha256, sh.file_size
+    FROM sent_history sh LEFT JOIN books b ON b.id = sh.book_id;
+DROP TABLE sent_history;
+CREATE INDEX idx_history_book_id ON history(book_id);
+CREATE INDEX idx_history_at ON history(at);
+"""
+
 MIGRATIONS: list[Migration] = [
     _SCHEMA_V1,
     _migrate_v2,
@@ -187,6 +213,7 @@ MIGRATIONS: list[Migration] = [
     _SCHEMA_V6,
     _SCHEMA_V7,
     _SCHEMA_V8,
+    _SCHEMA_V9,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -210,6 +237,13 @@ def clean_series(series: str | None, index: int | None) -> tuple[str | None, int
     """An empty series name means no series, and then no index either."""
     series = series.strip() if series else None
     return (series, index) if series else (None, None)
+
+
+def _action(value: str) -> HistoryAction:
+    try:
+        return HistoryAction(value)
+    except ValueError:
+        return HistoryAction.SENT  # unknown in this version: shown as a send
 
 
 def _parse_time(value: str) -> datetime:
@@ -557,36 +591,54 @@ class Database:
         with self.conn:
             self.conn.execute("DELETE FROM destinations WHERE id = ?", (destination_id,))
 
-    def log_sent(self, record: SentRecord) -> None:
+    def log(self, entry: HistoryEntry) -> None:
         with self.conn:
             self.conn.execute(
-                "INSERT INTO sent_history (id, book_id, target_type, target_name, format, "
-                "sent_at, status, destination_id, sha256, file_size) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO history (id, book_id, book_title, book_author, action, "
+                "destination_id, destination_kind, destination_name, format, at, sha256, "
+                "file_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    record.id,
-                    record.book_id,
-                    record.target_type,
-                    record.target_name,
-                    record.format,
-                    record.sent_at.isoformat(),
-                    record.status,
-                    record.destination_id,
-                    record.sha256,
-                    record.file_size,
+                    entry.id,
+                    entry.book_id,
+                    entry.book_title,
+                    entry.book_author,
+                    str(entry.action),
+                    entry.destination_id,
+                    entry.destination_kind,
+                    entry.destination_name,
+                    entry.format,
+                    entry.at.isoformat(),
+                    entry.sha256,
+                    entry.file_size,
                 ),
             )
 
-    def sends_for_book(self, book_id: str) -> list[SentRecord]:
-        """Newest first."""
-        rows = self.conn.execute(
-            "SELECT id, book_id, target_type, target_name, format, sent_at, status, "
-            "destination_id, sha256, file_size FROM sent_history WHERE book_id = ? "
-            "ORDER BY sent_at DESC",
-            (book_id,),
+    def history(self, book_id: str | None = None) -> list[HistoryEntry]:
+        """Newest first; one book's, or everything."""
+        query = (
+            "SELECT id, book_id, book_title, book_author, action, destination_id, "
+            "destination_kind, destination_name, format, at, sha256, file_size FROM history"
         )
+        params: tuple[str, ...] = ()
+        if book_id is not None:
+            query += " WHERE book_id = ?"
+            params = (book_id,)
+        rows = self.conn.execute(query + " ORDER BY at DESC, rowid DESC", params)
         return [
-            SentRecord(r[0], r[1], r[2], r[3], r[4], _parse_time(r[5]), r[6], r[7], r[8], r[9])
+            HistoryEntry(
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                _action(r[4]),
+                r[5],
+                r[6],
+                r[7],
+                r[8],
+                _parse_time(r[9]),
+                r[10],
+                r[11],
+            )
             for r in rows
         ]
 
@@ -597,7 +649,7 @@ class Database:
         library's current files and every copy that was sent."""
         rows = self.conn.execute(
             "SELECT book_id, format, sha256, file_size FROM book_files "
-            "UNION SELECT book_id, format, sha256, file_size FROM sent_history "
+            "UNION SELECT book_id, format, sha256, file_size FROM history "
             "WHERE sha256 IS NOT NULL AND file_size IS NOT NULL "
             "AND book_id IN (SELECT id FROM books)"
         )

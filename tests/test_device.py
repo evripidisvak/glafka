@@ -8,7 +8,7 @@ from test_importer import make_epub
 
 from glafka.core.errors import GlafkaError
 from glafka.core.library import LibraryManager
-from glafka.core.models import Destination
+from glafka.core.models import Destination, HistoryAction
 
 
 @pytest.fixture
@@ -122,7 +122,7 @@ def test_mark_as_removed_and_cascades(tmp_path, library, reader):
     library.send_to_usb(book.id, era_lite(library), reader)
     library.send_to_usb(other.id, era_lite(library), reader)
 
-    library.forget_device_copies("usb", book.id)
+    library.forget_device_copies(era_lite(library), book.id)
     assert library.books_on_readers() == {other.id}
 
     library.delete_book(other.id)
@@ -141,7 +141,35 @@ def test_history_remembers_the_copy_sent(tmp_path, library, reader):
     book = add_book(library, tmp_path, "Broken Harbour")
     library.send_to_usb(book.id, era_lite(library), reader)
 
-    [record] = library.sends_for_book(book.id)
+    [entry] = library.history(book.id)
 
-    assert (record.destination_id, record.sha256) == ("usb", book.files[0].sha256)
-    assert Path(book.files[0].file_path).stat().st_size == record.file_size
+    assert (entry.destination_id, entry.sha256) == ("usb", book.files[0].sha256)
+    assert Path(book.files[0].file_path).stat().st_size == entry.file_size
+
+
+def test_history_records_copies_deletes_and_marks_newest_first(tmp_path, library, reader):
+    book = add_book(library, tmp_path, "Broken Harbour")
+    other = add_book(library, tmp_path, "The Trespasser")
+    library.send_to_usb(book.id, era_lite(library), reader)
+    library.send_to_usb(other.id, era_lite(library), reader)
+    library.remove_from_device(book.id, era_lite(library), reader)
+    library.forget_device_copies(era_lite(library), other.id)
+
+    actions = [(e.book_title, e.action, e.format) for e in library.history()]
+
+    assert actions == [
+        ("The Trespasser", HistoryAction.MARKED_REMOVED, None),
+        ("Broken Harbour", HistoryAction.DELETED, "epub"),
+        ("The Trespasser", HistoryAction.SENT, "epub"),
+        ("Broken Harbour", HistoryAction.SENT, "epub"),
+    ]
+    assert [e.action for e in library.history(book.id)] == [
+        HistoryAction.DELETED,
+        HistoryAction.SENT,
+    ]
+
+
+def test_history_actions_are_distinct():
+    # A stray @dataclass on the enum once made every action compare equal
+    assert HistoryAction.DELETED != HistoryAction.SENT
+    assert len(set(HistoryAction)) == 4

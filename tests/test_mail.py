@@ -9,7 +9,7 @@ from test_importer import make_epub
 
 from glafka.core.errors import GlafkaError
 from glafka.core.library import LibraryManager
-from glafka.core.models import Destination, EmailAccount
+from glafka.core.models import Destination, EmailAccount, HistoryAction
 from glafka.core.send import SendStatus
 
 GMAIL = EmailAccount.gmail("me@gmail.com")
@@ -101,8 +101,13 @@ def test_email_carries_the_book_and_is_logged(smtp, library, book):
     with open(book.files[0].file_path, "rb") as f:
         assert attachment.get_content() == f.read()
     assert library.books_on_readers() == set()  # on the reader only once a scan finds it
-    [row] = library.db.conn.execute("SELECT target_type, target_name, status FROM sent_history")
-    assert tuple(row) == ("email", "PocketBook (email)", "sent")
+    [entry] = library.history(book.id)
+    assert (entry.destination_kind, entry.destination_name, entry.action) == (
+        "email",
+        "PocketBook (email)",
+        HistoryAction.SENT,
+    )
+    assert (entry.book_title, entry.format) == ("Butter", "epub")
 
 
 def test_ssl_accounts_never_use_starttls(smtp, library, book):
@@ -125,7 +130,7 @@ def test_rejected_password_explains_app_passwords_and_logs_nothing(smtp, library
 
     [server] = smtp.instances
     assert server.sent == []
-    assert library.sends_for_book(book.id) == []
+    assert library.history(book.id) == []
 
 
 def test_too_large_for_the_server_stops_before_logging_in(smtp, library, book):

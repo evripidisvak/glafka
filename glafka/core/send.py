@@ -10,8 +10,9 @@ from pathlib import Path, PurePosixPath
 
 from glafka.core.db import Database
 from glafka.core.errors import GlafkaError, NotFoundError
+from glafka.core.history import record
 from glafka.core.importer import compute_sha256
-from glafka.core.models import Book, BookFile, Destination, DeviceCopy, SentRecord, utc_now
+from glafka.core.models import Book, BookFile, Destination, DeviceCopy, HistoryAction
 
 _FAT_INVALID = set('\\/:*?"<>|')
 _MAX_FOLDER, _MAX_STEM = 80, 100  # keep whole paths well inside FAT and reader limits
@@ -100,7 +101,7 @@ def send_to_usb(
     if dest.exists():
         # Size first: hashing a large file over USB is slow
         if dest.stat().st_size == file.file_size and compute_sha256(dest) == file.sha256:
-            log_sent(db, book, destination, file, "already-there")
+            record(db, book, destination, HistoryAction.ALREADY_THERE, file=file)
             _on_device(db, book, destination, mount_root, dest)
             return SendResult(SendStatus.ALREADY_THERE, book, file.format, dest)
         if not replace:
@@ -110,7 +111,7 @@ def send_to_usb(
         raise GlafkaError(f"Not enough space on {destination.name}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     _copy_and_sync(source, dest)
-    log_sent(db, book, destination, file, "sent")
+    record(db, book, destination, HistoryAction.SENT, file=file)
     _on_device(db, book, destination, mount_root, dest)
     return SendResult(SendStatus.SENT, book, file.format, dest)
 
@@ -133,25 +134,6 @@ def _copy_and_sync(source: Path, dest: Path) -> None:
             os.fsync(fd)
         finally:
             os.close(fd)
-
-
-def log_sent(
-    db: Database, book: Book, destination: Destination, file: BookFile, status: str
-) -> None:
-    db.log_sent(
-        SentRecord(
-            id=str(uuid.uuid4()),
-            book_id=book.id,
-            target_type=destination.kind,
-            target_name=destination.name,
-            format=file.format,
-            sent_at=utc_now(),
-            status=status,
-            destination_id=destination.id,
-            sha256=file.sha256,
-            file_size=file.file_size,
-        )
-    )
 
 
 def _on_device(

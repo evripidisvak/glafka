@@ -40,7 +40,7 @@ Fedora/GNOME user, mostly EPUB plus some PDF, one e-reader (first target: Pocket
 
 ### 2. Browse and search
 - Cover grid, with a list-view toggle.
-- Sidebar: All, Recently added, Authors, Series, Tags, On reader (books on a USB reader at its last check; their covers carry a small reader badge).
+- Sidebar: All, Recently added, Authors, Series, Tags, On reader (books on a USB reader at its last check; their covers carry a small reader badge), History.
 - Grouped categories: Authors, Series and Tags separate the books into one section per group, with a header showing the group name (not just a sort order). Series sections are ordered by series index. A book with several tags appears under each of its tags.
 - Instant search over title, author, series.
 - Sort by title, author, date added, series index.
@@ -62,7 +62,9 @@ Fedora/GNOME user, mostly EPUB plus some PDF, one e-reader (first target: Pocket
 - Email readers are their own reader profiles (kind `email`, an address, formats); "Email to <reader>" (mail icon) is always offered for them. The book goes as one attachment named like on USB (`<Title> - <Author>.<ext>`). Encrypted connections only (STARTTLS or SSL/TLS).
 - Sent by email means the SMTP server accepted it; delivery problems arrive later as a bounce email. The size is checked against the limit the server advertises; each click sends another copy.
 - Emailed books land in the reader's Send-to-PocketBook folder, USB books in its books folder: a book sent both ways is on the device twice.
-- Toasts for queued/sent/failed; a sent-history log (destination, and the hash and size of the copy sent).
+- Toasts for queued/sent/failed.
+- History of what Glafka did, per book and destination: copied to (USB), emailed to, already on, deleted from (by Glafka), marked as removed; with format, time, and the hash and size of each copy sent. Only Glafka's own actions; what a scan notices is not recorded. Each entry keeps the book's title and author and the destination's name as they were, so it outlives renames and deleted books.
+- History page in the sidebar: newest first, grouped by day, filter by All / Copied by USB / Emailed / one destination, search by title, author or destination; a row opens its book (if still in the library). The details pane shows the book's own history in a collapsible row.
 - What is on each USB reader: scanned in the background each time it is plugged in (system and hidden folders skipped). A file is a library book when its content matches the library file or a copy that was sent, or, for EPUBs, when title and first author match a book that has an EPUB (catches copies Calibre edited). The scan replaces what was known for that reader. Copying to it records the copy right away; an emailed book counts once a scan finds it (in `SendToPb/`).
 - Details pane, "On Your Readers": per USB reader on it / not on it and when it was checked. Plugged in: **Delete** removes the copies in the books folder (confirmed; copies elsewhere are reported, never deleted). Unplugged: **Mark as Removed** until the next scan. Email destinations show the last email sent.
 - Deleting a file Calibre sent leaves Calibre's `metadata.calibre` out of date; Glafka never edits it (Calibre is expected to notice on its next connection; not verified).

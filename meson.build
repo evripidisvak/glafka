@@ -1,6 +1,6 @@
 project(
   'glafka',
-  version: '0.1.0',
+  version: '0.2.0',
   meson_version: '>= 0.64.0',
   license: 'GPL-3.0-or-later',
 )
@@ -45,6 +45,7 @@ install_data(
     'glafka/core/device.py',
     'glafka/core/errors.py',
     'glafka/core/grouping.py',
+    'glafka/core/history.py',
     'glafka/core/importer.py',
     'glafka/core/library.py',
     'glafka/core/mail.py',
@@ -62,6 +63,7 @@ install_data(
     'glafka/ui/book_object.py',
     'glafka/ui/details_pane.py',
     'glafka/ui/group_view.py',
+    'glafka/ui/history_view.py',
     'glafka/ui/job_progress.py',
     'glafka/ui/preferences.py',
     'glafka/ui/drives.py',

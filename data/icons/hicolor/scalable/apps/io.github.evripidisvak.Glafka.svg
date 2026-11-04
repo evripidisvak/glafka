@@ -25,11 +25,12 @@
   <rect x="22" y="16" width="86" height="106" rx="8" fill="#0d3d7a"/>
   <rect x="92" y="18" width="14" height="98" rx="3" fill="#f6f5f4"/>
   <path d="M96 24 v86 M100 24 v86" stroke="#deddda" stroke-width="1.5"/>
+  <linearGradient id="ribbon" x1="0" y1="0" x2="0" y2="1"><stop offset="0.35" stop-color="#c64600"/><stop offset="0.6" stop-color="#ffa348"/></linearGradient>
+  <path d="M72 110 h9 v17 l-4.5 -4 l-4.5 4 Z" fill="url(#ribbon)"/>
   <rect x="18" y="10" width="80" height="106" rx="8" fill="url(#cover)"/>
   <path d="M26 11 H90" stroke="#62a0ea" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
   <rect x="18" y="10" width="13" height="106" rx="6" fill="#15488f"/>
   <path d="M31.5 12 V114" stroke="#3584e4" stroke-width="1"/>
   <rect width="128" height="128" fill="#0d3d7a" opacity="0.6" mask="url(#owl)" transform="translate(0 1.2)"/>
   <rect width="128" height="128" fill="url(#gold)" mask="url(#owl)"/>
-  <path d="M74 108 v16 l5 -4.5 l5 4.5 v-16 Z" fill="#e01b24"/>
 </svg>

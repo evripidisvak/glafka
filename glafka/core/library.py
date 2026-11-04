@@ -10,6 +10,7 @@ from glafka.core.config import LEGACY_NAME, default_library_path
 from glafka.core.db import Database
 from glafka.core.device import RemoveResult, ScanResult, remove_from_device, scan_device
 from glafka.core.errors import RECOVERABLE_ERRORS, GlafkaError, MetadataError, NotFoundError
+from glafka.core.history import record
 from glafka.core.importer import (
     ImportPlan,
     ImportResult,
@@ -38,7 +39,8 @@ from glafka.core.models import (
     Destination,
     DeviceCopy,
     EmailAccount,
-    SentRecord,
+    HistoryAction,
+    HistoryEntry,
 )
 from glafka.core.send import SendResult, send_to_usb
 
@@ -310,12 +312,16 @@ class LibraryManager:
     def device_copies(self, book_id: str) -> list[DeviceCopy]:
         return self.db.device_copies(book_id)
 
-    def sends_for_book(self, book_id: str) -> list[SentRecord]:
-        return self.db.sends_for_book(book_id)
+    def history(self, book_id: str | None = None) -> list[HistoryEntry]:
+        """Newest first; one book's, or the whole library's."""
+        return self.db.history(book_id)
 
-    def forget_device_copies(self, destination_id: str, book_id: str) -> None:
+    def forget_device_copies(self, destination: Destination, book_id: str) -> None:
         """Mark as Removed: off that reader until the next scan says otherwise."""
-        self.db.remove_device_copies(destination_id, book_id)
+        self.db.remove_device_copies(destination.id, book_id)
+        book = self.db.get_book_by_id(book_id)
+        if book is not None:
+            record(self.db, book, destination, HistoryAction.MARKED_REMOVED)
 
     def send_to_usb(
         self, book_id: str, destination: Destination, mount_root: Path, replace: bool = False

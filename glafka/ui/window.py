@@ -13,13 +13,21 @@ from glafka.core.errors import RECOVERABLE_ERRORS
 from glafka.core.grouping import GroupBy, group_books, sort_key
 from glafka.core.importer import ImportPlan, ImportResult, ImportStatus, ItemOutcome
 from glafka.core.library import FileSync, LibraryManager
-from glafka.core.models import Book, BookFilter, BookSort, Destination, DeviceCopy
+from glafka.core.models import (
+    Book,
+    BookFilter,
+    BookSort,
+    Destination,
+    DeviceCopy,
+    HistoryAction,
+)
 from glafka.core.send import SendResult, SendStatus
 from glafka.ui.book_card import create_book_card, create_book_row
 from glafka.ui.book_object import BookObject
 from glafka.ui.details_pane import DetailsPane, ReaderStatus
 from glafka.ui.drives import DriveMonitor
 from glafka.ui.group_view import GroupView
+from glafka.ui.history_view import HistoryView, describe, details
 from glafka.ui.job_progress import JobProgress
 from glafka.ui.preferences import (
     DestinationSettings,
@@ -45,6 +53,7 @@ SORTS = {
 # Categories with a fixed order of their own: the sort menu is disabled there
 FIXED_ORDER = {
     "Recently Added": "Recently Added is always newest first",
+    "History": "History is always newest first",
     "Series": "Series are in reading order",
 }
 
@@ -53,11 +62,12 @@ GROUPED_CATEGORIES = {"Authors": GroupBy.AUTHOR, "Series": GroupBy.SERIES, "Tags
 
 CATEGORIES = [
     ("All Books", "accessories-dictionary-symbolic"),
-    ("Recently Added", "document-open-recent-symbolic"),
+    ("Recently Added", "document-new-symbolic"),
     ("Authors", "avatar-default-symbolic"),
     ("Series", "media-playlist-consecutive-symbolic"),
     ("Tags", "folder-saved-search-symbolic"),
     ("On Reader", "media-removable-symbolic"),
+    ("History", "document-open-recent-symbolic"),
 ]
 
 
@@ -271,12 +281,14 @@ class Window(Adw.ApplicationWindow):
             description="No books match the search or this category.",
         )
         self._group_view = GroupView(on_activate=self._show_details)
+        self._history_view = HistoryView(on_activate=self._open_book)
         self._regroup_pending = False
         self._view_stack.add_named(empty_page, "empty")
         self._view_stack.add_named(grid_scroll, "grid")
         self._view_stack.add_named(list_scroll, "list")
         self._view_stack.add_named(self._group_view.widget, "groups")
         self._view_stack.add_named(no_results_page, "no-results")
+        self._view_stack.add_named(self._history_view.widget, "history")
         self._view_stack.add_named(self._error_page, "error")
         self._add_buttons = (add_btn, empty_add_btn, empty_folder_btn)
 
@@ -409,11 +421,14 @@ class Window(Adw.ApplicationWindow):
         self._search_text = entry.get_text()
         self._filter.changed(Gtk.FilterChange.DIFFERENT)
         self._schedule_regroup()
+        self._refresh_history()
 
     def _on_category_selected(self, _list: Gtk.ListBox, row: Gtk.ListBoxRow | None) -> None:
         if isinstance(row, Adw.ActionRow):
             self._category = row.get_title()
             self._update_sort_button()
+            self._view_button.set_sensitive(self._category != "History")  # no grid/list there
+            self._refresh_history()
             self._overlay_split.set_show_sidebar(False)  # the shown book may not be in this view
             self._filter.changed(Gtk.FilterChange.DIFFERENT)
             self._sorter.changed(Gtk.SorterChange.DIFFERENT)
@@ -667,6 +682,7 @@ class Window(Adw.ApplicationWindow):
             self._overlay_split.set_show_sidebar(False)  # grouped views have no selection to drop
         if position is not None:
             self.store.remove(position)
+        self._refresh_history()  # its entries stay, without a link to the book
         if leftovers:
             names = ", ".join(p.name for p in leftovers)
             self.toast(f"Deleted '{title}', but could not remove: {names}")
@@ -716,6 +732,8 @@ class Window(Adw.ApplicationWindow):
             self._error_page.set_title(title)
             self._error_page.set_description(GLib.markup_escape_text(detail))
             page = "error"
+        elif self._category == "History":
+            page = "history"  # history outlives books: shown even with an empty library
         elif self.store.get_n_items() == 0:
             page = "empty"
         elif self._category in GROUPED_CATEGORIES:
@@ -985,6 +1003,27 @@ class Window(Adw.ApplicationWindow):
             self._filter.changed(Gtk.FilterChange.DIFFERENT)
         self._schedule_regroup()
         self._update_reader_status()
+        self._refresh_history()
+
+    def _refresh_history(self) -> None:
+        """Rebuild the History page, only while it is showing."""
+        if self._category != "History" or self.library is None:
+            return
+        try:
+            entries = self.library.history()
+        except RECOVERABLE_ERRORS as e:
+            log.warning("Could not load the history: %s", e)
+            return
+        books = {
+            o.book.id: o.book
+            for o in (self.store.get_item(i) for i in range(self.store.get_n_items()))
+        }
+        self._history_view.set_entries(entries, books, self._destinations, self._search_text)
+
+    def _open_book(self, book_id: str) -> None:
+        position = self._store_position(book_id)
+        if position is not None:
+            self._show_details(self.store.get_item(position))
 
     def _update_reader_status(self) -> None:
         shown = self._details.current_book
@@ -994,7 +1033,7 @@ class Window(Adw.ApplicationWindow):
         book_id = shown.book.id
         try:
             copies = self.library.device_copies(book_id)
-            sends = self.library.sends_for_book(book_id)
+            history = self.library.history(book_id)
         except RECOVERABLE_ERRORS as e:
             log.warning("Could not load where '%s' is: %s", shown.book.title, e)
             return
@@ -1005,14 +1044,20 @@ class Window(Adw.ApplicationWindow):
                 rows.append(_usb_status(dest, copies, dest.id in connected))
                 continue
             sent = next(
-                (r for r in sends if r.destination_id == dest.id and r.status == "sent"), None
+                (
+                    e
+                    for e in history
+                    if e.destination_id == dest.id and e.action == HistoryAction.SENT
+                ),
+                None,
             )
             if sent is not None:
                 seen = "" if copies else ", not seen on a reader yet"
-                rows.append(
-                    ReaderStatus(dest.id, f"Emailed to {dest.name}", _when(sent.sent_at) + seen)
-                )
+                rows.append(ReaderStatus(dest.id, f"Emailed to {dest.name}", _when(sent.at) + seen))
         self._details.set_reader_status(rows)
+        self._details.set_history(
+            [(describe(e)[0], details(e, with_date=True), describe(e)[1]) for e in history]
+        )
 
     def _on_reader_action(self, book_id: str, destination_id: str, action: str) -> None:
         dest = next((d for d in self._destinations if d.id == destination_id), None)
@@ -1020,7 +1065,7 @@ class Window(Adw.ApplicationWindow):
             return
         if action == "forget":
             try:
-                self.library.forget_device_copies(destination_id, book_id)
+                self.library.forget_device_copies(dest, book_id)
             except RECOVERABLE_ERRORS as e:
                 self.toast(f"Could not change it: {e}")
                 return
@@ -1154,6 +1199,7 @@ class Window(Adw.ApplicationWindow):
             case SendStatus.SENT | SendStatus.ALREADY_THERE:
                 if destination.kind == "email":
                     self._update_reader_status()
+                    self._refresh_history()
                     self.toast(f"Emailed '{title}' to {destination.name}")
                     return
                 self._refresh_on_reader()
@@ -1242,6 +1288,7 @@ class Window(Adw.ApplicationWindow):
         self._scanned_mounts = set()  # the new library's readers get scanned too
         self.reload_books()
         self._load_destinations()
+        self._refresh_history()
         if self._error is None:
             books = (self.store.get_item(i).book for i in range(self.store.get_n_items()))
             thumbnails().prune([Path(b.cover_path) for b in books if b.cover_path])

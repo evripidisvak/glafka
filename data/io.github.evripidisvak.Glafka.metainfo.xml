@@ -25,6 +25,17 @@
     <color type="primary" scheme_preference="dark">#1a5fb4</color>
   </branding>
   <releases>
+    <release version="0.2.0" date="2026-11-04">
+      <description>
+        <p>See what was sent where and when.</p>
+        <ul>
+          <li>History page: every copy to a reader, email, deletion from a reader and "mark as removed", by day, with a filter for emailed books</li>
+          <li>Each book's own history in its details</li>
+          <li>Icon: a softer bookmark ribbon</li>
+        </ul>
+        <p>The library database is upgraded on first start; older versions cannot open it after that.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-31"/>
   </releases>
 </component>

@@ -14,7 +14,7 @@ Glafka keeps your ebooks in one tidy library and gets them onto your e-reader, b
 - Copy books to a USB e-reader in Calibre's folder layout, or email them (for example to Send-to-PocketBook)
 - See which books are on your reader: it is checked each time you plug it in
 
-Early days: version 0.1. Converting between formats is not there yet. Developed and tested on Fedora with GNOME and a PocketBook reader.
+Early days: version 0.2. Converting between formats is not there yet. Developed and tested on Fedora with GNOME and a PocketBook reader.
 
 ## Install (Fedora, GNOME)
 
@@ -22,19 +22,19 @@ Early days: version 0.1. Converting between formats is not there yet. Developed 
 sudo dnf install git meson python3-gobject python3-lxml poppler-utils libsecret
 git clone https://github.com/evripidisvak/glafka.git
 cd glafka
-git checkout v0.1.0
 meson setup _build --prefix="$HOME/.local"
 meson install -C _build
 ```
 
 Glafka then appears in the app grid like any other app.
 
+`main` only gets released versions (tagged `v0.1.0`, `v0.2.0`, ...); new work happens on feature branches.
+
 ### Update
 
 ```sh
 cd glafka
-git fetch --tags
-git checkout v0.2.0    # the version you want
+git pull
 meson install -C _build
 ```
 

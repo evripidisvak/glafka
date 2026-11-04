@@ -11,9 +11,10 @@ from pathlib import Path
 
 from glafka.core.db import Database
 from glafka.core.errors import GlafkaError
+from glafka.core.history import record
 from glafka.core.importer import compute_sha256
 from glafka.core.metadata.epub import find_opf_path, parse_opf
-from glafka.core.models import BookFilter, BookSort, Destination, DeviceCopy, utc_now
+from glafka.core.models import BookFilter, BookSort, Destination, DeviceCopy, HistoryAction, utc_now
 
 # The reader's own folders; hidden ones (.Trash-1000, .adobe-digital-editions) are skipped too
 _SKIP_DIRS = {"system", "System Volume Information", "$RECYCLE.BIN"}
@@ -88,6 +89,10 @@ def remove_from_device(
         result.removed.append(copy.path)
         _remove_empty_folders(path.parent, books_root)
     db.remove_device_copies(destination.id, book_id, result.removed)
+    book = db.get_book_by_id(book_id)
+    if book is not None:
+        for path in result.removed:
+            record(db, book, destination, HistoryAction.DELETED, fmt=Path(path).suffix[1:].lower())
     return result
 
 

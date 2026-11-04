@@ -13,8 +13,9 @@ from pathlib import Path
 
 from glafka.core.db import Database
 from glafka.core.errors import GlafkaError, NotFoundError
-from glafka.core.models import Book, BookFile, Destination, EmailAccount
-from glafka.core.send import SendResult, SendStatus, choose_format, file_name, log_sent
+from glafka.core.history import record
+from glafka.core.models import Book, BookFile, Destination, EmailAccount, HistoryAction
+from glafka.core.send import SendResult, SendStatus, choose_format, file_name
 
 _TIMEOUT = 60  # seconds per network step, not for the whole upload
 _ADDRESS = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
@@ -82,7 +83,7 @@ def send_by_email(
         raise GlafkaError(f"{account.host} refused the email: {e.smtp_code} {reply}") from e
     except (smtplib.SMTPException, OSError) as e:
         raise GlafkaError(f"Could not send through {account.host}: {e}") from e
-    log_sent(db, book, destination, file, "sent")
+    record(db, book, destination, HistoryAction.SENT, file=file)
     return SendResult(SendStatus.SENT, book, file.format)
 
 

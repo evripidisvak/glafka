@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 
 
 def utc_now() -> datetime:
@@ -65,16 +65,27 @@ class EmailAccount:
         return cls(address, "smtp.gmail.com", 587, "starttls", address, "gmail")
 
 
+class HistoryAction(StrEnum):
+    SENT = "sent"  # copied to a USB reader, or emailed
+    ALREADY_THERE = "already-there"  # an identical copy was already on the reader
+    DELETED = "deleted"  # deleted from a USB reader by Glafka
+    MARKED_REMOVED = "marked-removed"
+
+
 @dataclass
-class SentRecord:
+class HistoryEntry:
+    """Something Glafka did with a book and a destination. Kept when either is deleted."""
+
     id: str
-    book_id: str
-    target_type: str  # "usb" or "email"
-    target_name: str
-    format: str
-    sent_at: datetime
-    status: str
-    destination_id: str | None = None  # None in rows from before schema v8
+    book_id: str | None  # None once the book is deleted from the library
+    book_title: str  # as it was then
+    book_author: str
+    action: HistoryAction
+    destination_id: str | None  # None in entries from before schema v8
+    destination_kind: str  # "usb" or "email"
+    destination_name: str  # as it was then
+    format: str | None
+    at: datetime
     sha256: str | None = None  # of the copy sent, to recognise it on the reader later
     file_size: int | None = None
 
