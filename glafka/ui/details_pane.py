@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from gi.repository import Adw, Gtk
 
-from glafka.core.models import Destination
+from glafka.core.models import Book, Destination
 from glafka.core.text import html_to_text
 from glafka.ui.book_card import generated_cover, load_texture
 from glafka.ui.book_object import BookObject
@@ -239,21 +239,7 @@ class DetailsPane:
             return
         book = book_obj.book
 
-        while (child := self.cover_slot.get_first_child()) is not None:
-            self.cover_slot.remove(child)
-        texture = load_texture(book.cover_path)
-        if texture is not None:
-            cover: Gtk.Widget = Gtk.Picture(
-                paintable=texture,
-                height_request=240,
-                can_shrink=True,
-                content_fit=Gtk.ContentFit.SCALE_DOWN,
-                css_classes=["card"],
-            )
-        else:
-            cover = generated_cover(book, 168, 240)
-            cover.add_css_class("card")
-        self.cover_slot.append(cover)
+        self._show_cover(book)
         self.title_entry.set_text(book.title)
         self.author_entry.set_text(book.author)
         self.series_entry.set_text(book.series or "")
@@ -270,6 +256,28 @@ class DetailsPane:
             )
             row.add_prefix(Gtk.Image(icon_name="document-open-symbolic"))
             self.formats_list.append(row)
+
+    def refresh_cover(self, book: Book) -> None:
+        """After a save, if this book is shown: a generated cover draws its title and author."""
+        if self.current_book is not None and self.current_book.book.id == book.id:
+            self._show_cover(book)
+
+    def _show_cover(self, book: Book) -> None:
+        while (child := self.cover_slot.get_first_child()) is not None:
+            self.cover_slot.remove(child)
+        texture = load_texture(book.cover_path)
+        if texture is not None:
+            cover: Gtk.Widget = Gtk.Picture(
+                paintable=texture,
+                height_request=240,
+                can_shrink=True,
+                content_fit=Gtk.ContentFit.SCALE_DOWN,
+                css_classes=["card"],
+            )
+        else:
+            cover = generated_cover(book, 168, 240)
+            cover.add_css_class("card")
+        self.cover_slot.append(cover)
 
     def save(self) -> None:
         self._save(None)
