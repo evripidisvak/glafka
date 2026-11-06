@@ -39,6 +39,8 @@ class DetailsPane:
         self._on_reader_action = on_reader_action
         self.current_book: BookObject | None = None
         self._shown_description = ""  # as displayed: plain text even if stored as HTML
+        self._changed_handler: int | None = None  # on current_book's "changed"
+        self._cover_key: tuple | None = None  # what the cover on show was drawn from
 
         self.container = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
@@ -234,11 +236,15 @@ class DetailsPane:
             self._on_reader_action(self.current_book.book.id, destination_id, action)
 
     def set_book(self, book_obj: BookObject | None) -> None:
+        if self._changed_handler is not None:  # stop following the previous book
+            self.current_book.disconnect(self._changed_handler)
+            self._changed_handler = None
         self.current_book = book_obj
         if book_obj is None:
             return
+        self._changed_handler = book_obj.connect("changed", self._on_book_changed)
         book = book_obj.book
-
+        self._cover_key = None
         self._show_cover(book)
         self.title_entry.set_text(book.title)
         self.author_entry.set_text(book.author)
@@ -257,12 +263,17 @@ class DetailsPane:
             row.add_prefix(Gtk.Image(icon_name="document-open-symbolic"))
             self.formats_list.append(row)
 
-    def refresh_cover(self, book: Book) -> None:
-        """After a save, if this book is shown: a generated cover draws its title and author."""
-        if self.current_book is not None and self.current_book.book.id == book.id:
-            self._show_cover(book)
+    def _on_book_changed(self, book_obj: BookObject) -> None:
+        """A save, reload or file sync updated the book. Fields are not refilled:
+        they may hold edits not saved yet (a file sync can finish seconds later)."""
+        self._show_cover(book_obj.book)
+        self._shown_description = html_to_text(book_obj.book.description or "")
 
     def _show_cover(self, book: Book) -> None:
+        key = (book.cover_path, book.title, book.author)  # a generated cover draws title and author
+        if key == self._cover_key:
+            return  # e.g. only the series changed: keep the image already decoded
+        self._cover_key = key
         while (child := self.cover_slot.get_first_child()) is not None:
             self.cover_slot.remove(child)
         texture = load_texture(book.cover_path)
