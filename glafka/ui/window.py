@@ -551,7 +551,6 @@ class Window(Adw.ApplicationWindow):
         updated = self.library.get_book_by_id(book_id)
         if updated is not None:
             self._refresh_book(updated)
-            self._details.refresh_cover(updated)
         self.toast(f"Saved changes for '{title}'")
         self._sync_files(book_id)
 
@@ -628,7 +627,7 @@ class Window(Adw.ApplicationWindow):
         shown = self._details.current_book
         if shown is not None and shown.book.id == sync.book.id:
             shown.update(sync.book)  # grouped views may show another object for the same book
-            self._details.set_book(shown)  # the pane doesn't follow "changed" by itself
+            self._details.set_book(shown)  # a reload refills every field, not just the cover
             self._update_reader_status()
         text = f"Reloaded '{sync.book.title}' from its file"
         self.toast(f"{text}, but: {'; '.join(sync.problems)}" if sync.problems else text)
