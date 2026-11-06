@@ -551,6 +551,7 @@ class Window(Adw.ApplicationWindow):
         updated = self.library.get_book_by_id(book_id)
         if updated is not None:
             self._refresh_book(updated)
+            self._details.refresh_cover(updated)
         self.toast(f"Saved changes for '{title}'")
         self._sync_files(book_id)
 
