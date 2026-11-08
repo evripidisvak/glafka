@@ -7,7 +7,7 @@ Spec: `SPEC.md`. Updated 2026-11-04.
 - Bugs get a failing test first, then the fix.
 - Done means: `pytest` green, `ruff check` clean, runs from GNOME Builder.
 - New work happens on a `feature/<name>` branch; one commit at the end of each work day. `main` only gets released versions, which is what installs follow (`git pull`, `meson install -C _build`).
-- Release: on the branch, bump the version in `meson.build`, `glafka/__init__.py`, a `<release>` in the metainfo and the README; commit; `git merge --ff-only` into `main`; tag `vX.Y.Z`; push `main` and the tag; delete the branch.
+- Release: on the branch, bump the version in `meson.build`, `glafka/__init__.py`, a `<release>` in the metainfo and the README; commit; push the branch and open a PR into `main` (`Closes #N` in its description); optionally `/code-review`; **Squash and merge** with the message written at merge time; tag `vX.Y.Z` on that commit; release page; reply on the issue; delete the branch.
 
 ## Status
 
