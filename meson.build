@@ -66,6 +66,7 @@ install_data(
     'glafka/ui/group_view.py',
     'glafka/ui/history_view.py',
     'glafka/ui/job_progress.py',
+    'glafka/ui/pixbufs.py',
     'glafka/ui/preferences.py',
     'glafka/ui/drives.py',
     'glafka/ui/secrets.py',

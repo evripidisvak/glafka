@@ -78,7 +78,7 @@ def test_generated_cover_is_the_tile_drawn_large_in_the_book_s_colour():
     from glafka.ui.style import COVER_COLORS, cover_color
 
     book = Book("b", "The Secret Place", "Tana French")
-    drawn = cover_image.generated(book)
+    drawn = cover_image.generated(book, cover_image.ui_font())
 
     hex_colour = COVER_COLORS[cover_color(book.title, book.author)]
     rgb = tuple(int(hex_colour[i : i + 2], 16) for i in (1, 3, 5))
@@ -97,3 +97,39 @@ def test_generated_cover_is_the_tile_drawn_large_in_the_book_s_colour():
     assert has_text(130, 400)  # title near the top
     assert has_text(1350, 1500)  # author near the bottom
     assert not has_text(700, 900)  # nothing in the middle
+
+
+def test_big_photos_are_loaded_scaled_down(tmp_path):
+    path = tmp_path / "big.png"
+    image(5000, 3000, 0x808080FF).savev(str(path), "png", [], [])
+
+    loaded = cover_image.load(str(path))
+
+    assert (loaded.get_width(), loaded.get_height()) == (2400, 1440)
+
+
+def test_encoded_covers_carry_their_size():
+    cover = cover_image.encode(image(500, 2000, 0x808080FF))
+
+    assert (cover.width, cover.height) == (400, 1600)
+
+
+def test_a_file_that_is_no_image_is_a_clean_error(tmp_path):
+    from glafka.core.errors import GlafkaError
+
+    path = tmp_path / "notes.txt"
+    path.write_text("not an image")
+
+    with pytest.raises(GlafkaError):
+        cover_image.load(str(path))
+
+
+def test_lazy_covers_offer_jpeg_and_png_but_encode_only_what_is_asked():
+    covers = cover_image.LazyCovers(image(200, 3000, 0x808080FF))
+
+    jpeg = covers["image/jpeg"]
+
+    assert set(covers) == {"image/jpeg", "image/png"}
+    assert (jpeg.mime_type, jpeg.width, jpeg.height) == ("image/jpeg", 107, 1600)  # scaled once
+    assert set(covers._encoded) == {"image/jpeg"}  # no PNG made until something asks for it
+    assert covers["image/png"].mime_type == "image/png"

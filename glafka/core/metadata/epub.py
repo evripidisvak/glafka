@@ -87,7 +87,9 @@ def parse_opf(xml: bytes | str) -> tuple[ExtractedMetadata, str | None]:
                 index = parse_series_index(content)
                 if index is not None:
                     meta.series_index = index
-            elif meta_name == "cover" and content:
+            elif (
+                meta_name == "cover" and content.strip() and cover_id is None
+            ):  # first wins, as in the writer
                 cover_id = content
             # EPUB 3 puts collection name and position in the element text, not `content`
             elif prop == "belongs-to-collection" and text and meta.series is None:
@@ -101,49 +103,37 @@ def parse_opf(xml: bytes | str) -> tuple[ExtractedMetadata, str | None]:
 
 
 def _find_cover_href(cover_id: str | None, manifest: list[_ManifestItem]) -> str | None:
-    item = find_cover_item(cover_id, manifest)
-    return item[1] if item else None
+    found = find_cover(cover_id, manifest)
+    return found[0][1] if found else None
 
 
-def find_cover_item(cover_id: str | None, manifest: list[_ManifestItem]) -> _ManifestItem | None:
-    """The cover image's (id, href, media type, properties); the writer must pick the same one."""
+def find_cover(
+    cover_id: str | None, manifest: list[_ManifestItem]
+) -> tuple[_ManifestItem, str] | None:
+    """The cover item and how it was found: "meta", "property", or a "guess" from its name."""
     # 1. <meta name="cover" content="item-id"> (EPUB 2)
     if cover_id:
         for item in manifest:
             if item[0] == cover_id:
-                return item
+                return item, "meta"
     # 2. properties="cover-image" (EPUB 3)
     for item in manifest:
         if "cover-image" in item[3].split():
-            return item
+            return item, "property"
     # 3. and 4. Heuristics: an image whose id, then whose href, mentions "cover"
     for item in manifest:
         if item[2].startswith("image/") and "cover" in item[0].lower():
-            return item
+            return item, "guess"
     for item in manifest:
         if item[2].startswith("image/") and "cover" in item[1].lower():
-            return item
+            return item, "guess"
     return None
 
 
-def cover_media_type(epub_path: Path) -> str | None:
-    """Media type of the EPUB's cover image (to embed a new one in the same format), if any."""
-    try:
-        with zipfile.ZipFile(epub_path) as zf:
-            root = ET.fromstring(zf.read(find_opf_path(zf)))
-    except (OSError, KeyError, zipfile.BadZipFile, ET.ParseError, MetadataError):
-        return None
-    manifest: list[_ManifestItem] = []
-    cover_id = None
-    for elem in root.iter():
-        name = _local(elem.tag)
-        if name == "item":
-            item = (elem.get("id", ""), elem.get("href", ""), elem.get("media-type", ""))
-            manifest.append((*item, elem.get("properties", "")))
-        elif name == "meta" and elem.get("name") == "cover" and elem.get("content"):
-            cover_id = elem.get("content")
-    item = find_cover_item(cover_id, manifest)
-    return item[2] if item else None
+def normal_media_type(media_type: str) -> str:
+    """'image/jpg' is common in the wild but means image/jpeg."""
+    media_type = media_type.strip().lower()
+    return "image/jpeg" if media_type in ("image/jpg", "image/pjpeg") else media_type
 
 
 def find_opf_path(zf: zipfile.ZipFile) -> str:

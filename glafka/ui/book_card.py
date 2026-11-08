@@ -57,10 +57,7 @@ def framed_picture(
     texture: Gdk.Texture, width: int, height: int, css: list[str] | None = None
 ) -> Gtk.Widget:
     """Exactly width x height whatever the image's shape; the rest is cropped.
-
-    A picture's natural size follows its image: clamp both ways, or a narrow cover makes
-    its tile taller and a wide one makes it wider.
-    """
+    Clamped both ways: a picture's natural size follows its image."""
     picture = Gtk.Picture(
         paintable=texture,
         can_shrink=True,
@@ -88,20 +85,21 @@ def cover_widget(book: Book, width: int, height: int, with_text: bool = True) ->
         halign=Gtk.Align.CENTER,
     )
 
-    def picture(texture: Gdk.Texture) -> Gtk.Widget:
-        return framed_picture(texture, width, height)
-
     def show(texture: Gdk.Texture | None) -> None:
         if box.get_root() is None:
             return  # tile or row reused for another book, or closed, since the request
         while (child := box.get_first_child()) is not None:
             box.remove(child)
-        box.append(picture(texture) if texture else generated_cover(book, width, height, with_text))
+        box.append(
+            framed_picture(texture, width, height)
+            if texture
+            else generated_cover(book, width, height, with_text)
+        )
 
     if book.cover_path and Path(book.cover_path).exists():
         texture = thumbnails().load(Path(book.cover_path), show)
         if texture is not None:
-            box.append(picture(texture))
+            box.append(framed_picture(texture, width, height))
         else:
             box.append(
                 Gtk.Box(

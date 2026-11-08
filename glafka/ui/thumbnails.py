@@ -11,6 +11,7 @@ from pathlib import Path
 from gi.repository import Gdk, GdkPixbuf, GLib
 
 from glafka.core.config import LEGACY_NAME
+from glafka.ui.pixbufs import flatten_on_white
 
 log = logging.getLogger(__name__)
 
@@ -44,25 +45,7 @@ def thumbnail_path(cover: Path, directory: Path) -> Path | None:
 def make_thumbnail(cover: Path, dest: Path) -> None:
     """Scale the cover to fit THUMB_WIDTH x THUMB_HEIGHT and save it as JPEG."""
     pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(cover), THUMB_WIDTH, THUMB_HEIGHT, True)
-    if pixbuf.get_has_alpha():  # JPEG has no alpha: flatten onto white
-        flat = GdkPixbuf.Pixbuf.new(
-            GdkPixbuf.Colorspace.RGB, False, 8, pixbuf.get_width(), pixbuf.get_height()
-        )
-        flat.fill(0xFFFFFFFF)
-        pixbuf.composite(
-            flat,
-            0,
-            0,
-            flat.get_width(),
-            flat.get_height(),
-            0,
-            0,
-            1,
-            1,
-            GdkPixbuf.InterpType.BILINEAR,
-            255,
-        )
-        pixbuf = flat
+    pixbuf = flatten_on_white(pixbuf)  # JPEG has no alpha
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.{threading.get_ident()}.tmp")
     pixbuf.savev(str(tmp), "jpeg", ["quality"], ["85"])

@@ -1,5 +1,6 @@
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
@@ -11,6 +12,21 @@ _MAX_SERIES_INDEX = 2**31 - 1
 class CoverImage:
     mime_type: str
     data: bytes
+    width: int | None = None  # known for covers Glafka made: lets the writer fit a cover page
+    height: int | None = None
+
+
+# The same cover in several formats; the writer uses the one matching each EPUB's own cover
+Covers = Mapping[str, CoverImage]
+
+
+def as_covers(cover: "CoverImage | Covers") -> Covers:
+    return cover if isinstance(cover, Mapping) else {cover.mime_type: cover}
+
+
+def preferred(covers: Covers) -> CoverImage:
+    """JPEG when there is one: smaller for photos, and what a new cover is stored as."""
+    return covers.get("image/jpeg") or next(iter(covers.values()))
 
 
 @dataclass

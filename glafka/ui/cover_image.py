@@ -1,24 +1,38 @@
 """A picked image file as a book cover: upright, book-shaped if wanted, at most MAX_HEIGHT tall."""
 
-import io
+import sys
+from collections.abc import Iterator, Mapping
+from typing import TYPE_CHECKING
 
-import cairo
-from gi.repository import GdkPixbuf, Gtk, Pango, PangoCairo
+from gi.repository import GdkPixbuf, GLib, Gtk, Pango
 
+from glafka.core.errors import GlafkaError
 from glafka.core.metadata import CoverImage
 from glafka.core.models import Book
+from glafka.ui.pixbufs import flatten_on_white
 from glafka.ui.style import COVER_COLORS, cover_color
 
+if TYPE_CHECKING:
+    import cairo
+
 MAX_HEIGHT = 1600  # plenty for a reader's screen; keeps the EPUB small
+LOAD_MAX = 2400  # big photos are decoded at this size: every later step stays quick
 RATIO = 2 / 3  # width / height of a typical ebook cover
 WIDE = 0.8  # wider than this (width / height) and it doesn't look like a book cover
 
 
 def load(path: str) -> GdkPixbuf.Pixbuf:
-    """Upright (phone photos carry a rotation). Raises GLib.Error or ValueError."""
-    if GdkPixbuf.Pixbuf.get_file_info(path)[0] is None:
-        raise ValueError("not an image Glafka can read")
-    pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+    """Upright (phone photos carry a rotation). Raises GlafkaError. Safe off the main thread."""
+    found, width, height = GdkPixbuf.Pixbuf.get_file_info(path)
+    if found is None:
+        raise GlafkaError("not an image Glafka can read")
+    try:
+        if max(width, height) > LOAD_MAX:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, LOAD_MAX, LOAD_MAX, True)
+        else:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+    except GLib.Error as e:
+        raise GlafkaError(e.message) from e
     return pixbuf.apply_embedded_orientation() or pixbuf
 
 
@@ -31,14 +45,11 @@ def crop(pixbuf: GdkPixbuf.Pixbuf) -> GdkPixbuf.Pixbuf:
     width, height = pixbuf.get_width(), pixbuf.get_height()
     cut = min(width, round(height * RATIO))
     middle = pixbuf.new_subpixbuf((width - cut) // 2, 0, cut, height)
-    return _fit_height(middle, MAX_HEIGHT)
+    return fit_height(middle, MAX_HEIGHT)
 
 
 def fit(pixbuf: GdkPixbuf.Pixbuf) -> GdkPixbuf.Pixbuf:
-    """The whole image centred on a book-shaped cover, in the image's own (darkened) colour.
-
-    The cover is as wide as the image (capped), so a small image isn't lost in a big cover.
-    """
+    """The whole image centred on a 2:3 cover as wide as the image (capped), in its own colour."""
     canvas_w = min(round(MAX_HEIGHT * RATIO), pixbuf.get_width())
     canvas_h = round(canvas_w / RATIO)  # taller than any wide image of that width
     image = _scaled(pixbuf, canvas_w / pixbuf.get_width())  # never up: canvas_w <= width
@@ -50,8 +61,11 @@ def fit(pixbuf: GdkPixbuf.Pixbuf) -> GdkPixbuf.Pixbuf:
     return canvas
 
 
-def generated(book: Book) -> GdkPixbuf.Pixbuf:
-    """The in-app generated cover as a full-size image: the 140x200 tile's layout, scaled up."""
+def generated(book: Book, family: str) -> GdkPixbuf.Pixbuf:
+    """The tile's generated cover drawn at full size; `family` from ui_font() (main thread)."""
+    import cairo  # only needed here
+    from gi.repository import PangoCairo
+
     width, height = round(MAX_HEIGHT * RATIO), MAX_HEIGHT
     unit = width / 140  # measurements below are the tile's, in its pixels
     surface = cairo.ImageSurface(cairo.FORMAT_RGB24, width, height)
@@ -59,7 +73,7 @@ def generated(book: Book) -> GdkPixbuf.Pixbuf:
     colour = COVER_COLORS[cover_color(book.title, book.author)]
     cr.set_source_rgb(*(int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5)))
     cr.paint()
-    family, text_px = _ui_font(), 14.67 * unit  # GTK's 11 pt at 96 dpi
+    text_px = 14.67 * unit  # GTK's 11 pt at 96 dpi
     margin = 12 * unit
     title = _layout(cr, book.title, family, text_px, Pango.Weight.ULTRABOLD, 5, width - 2 * margin)
     cr.set_source_rgb(1, 1, 1)
@@ -71,45 +85,72 @@ def generated(book: Book) -> GdkPixbuf.Pixbuf:
     cr.set_source_rgba(1, 1, 1, 0.85)
     cr.move_to(margin, height - 14 * unit - author.get_pixel_size()[1])
     PangoCairo.show_layout(cr, author)
-    png = io.BytesIO()
-    surface.write_to_png(png)
-    loader = GdkPixbuf.PixbufLoader()
-    loader.write(png.getvalue())
-    loader.close()
-    return loader.get_pixbuf()
+    surface.flush()
+    return _rgb_pixbuf(bytes(surface.get_data()), width, height, surface.get_stride())
 
 
 def encode(pixbuf: GdkPixbuf.Pixbuf, png: bool = False) -> CoverImage:
     """At most MAX_HEIGHT tall (never scaled up); JPEG puts transparency on white."""
-    pixbuf = _fit_height(pixbuf, MAX_HEIGHT)
+    pixbuf = fit_height(pixbuf, MAX_HEIGHT)
     if png:
         _ok, data = pixbuf.save_to_bufferv("png", [], [])
-        return CoverImage(mime_type="image/png", data=bytes(data))
-    if pixbuf.get_has_alpha():
-        width, height = pixbuf.get_width(), pixbuf.get_height()
-        flat = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, width, height)
-        flat.fill(0xFFFFFFFF)
-        pixbuf.composite(flat, 0, 0, width, height, 0, 0, 1, 1, GdkPixbuf.InterpType.BILINEAR, 255)
-        pixbuf = flat
+        return CoverImage("image/png", bytes(data), pixbuf.get_width(), pixbuf.get_height())
+    pixbuf = flatten_on_white(pixbuf)
     _ok, data = pixbuf.save_to_bufferv("jpeg", ["quality"], ["90"])
-    return CoverImage(mime_type="image/jpeg", data=bytes(data))
+    return CoverImage("image/jpeg", bytes(data), pixbuf.get_width(), pixbuf.get_height())
+
+
+class LazyCovers(Mapping[str, CoverImage]):
+    """One image as JPEG and PNG, each encoded only when the library asks for that format."""
+
+    TYPES = ("image/jpeg", "image/png")
+
+    def __init__(self, pixbuf: GdkPixbuf.Pixbuf) -> None:
+        self._pixbuf = fit_height(pixbuf, MAX_HEIGHT)  # scaled once for both formats
+        self._encoded: dict[str, CoverImage] = {}
+
+    def __getitem__(self, media_type: str) -> CoverImage:
+        if media_type not in self.TYPES:
+            raise KeyError(media_type)
+        if media_type not in self._encoded:
+            self._encoded[media_type] = encode(self._pixbuf, png=media_type == "image/png")
+        return self._encoded[media_type]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.TYPES)
+
+    def __len__(self) -> int:
+        return len(self.TYPES)
+
+
+def _rgb_pixbuf(data: bytes, width: int, height: int, stride: int) -> GdkPixbuf.Pixbuf:
+    """Cairo's RGB24 (B, G, R, unused on little-endian machines) to an RGB pixbuf."""
+    rows = [data[y * stride : y * stride + width * 4] for y in range(height)]
+    pixels = b"".join(rows) if stride != width * 4 else data[: width * height * 4]
+    b, g, r = (0, 1, 2) if sys.byteorder == "little" else (3, 2, 1)
+    rgb = bytearray(width * height * 3)
+    rgb[0::3], rgb[1::3], rgb[2::3] = pixels[r::4], pixels[g::4], pixels[b::4]
+    return GdkPixbuf.Pixbuf.new_from_bytes(
+        GLib.Bytes.new(bytes(rgb)), GdkPixbuf.Colorspace.RGB, False, 8, width, height, width * 3
+    )
 
 
 def preview_png(pixbuf: GdkPixbuf.Pixbuf, height: int = 180) -> bytes:
     """Small PNG of a candidate cover, for the dialog."""
-    _ok, data = _fit_height(pixbuf, height).save_to_bufferv("png", [], [])
+    _ok, data = fit_height(pixbuf, height).save_to_bufferv("png", [], [])
     return bytes(data)
 
 
 def _background(pixbuf: GdkPixbuf.Pixbuf) -> int:
     """The image's average colour, darkened a little so the picture stands out; as 0xRRGGBBAA."""
-    dot = pixbuf.scale_simple(1, 1, GdkPixbuf.InterpType.HYPER)  # HYPER averages properly
+    dot = pixbuf.scale_simple(1, 1, GdkPixbuf.InterpType.BILINEAR)  # averages when shrinking
     r, g, b = dot.get_pixels()[:3]
     r, g, b = (round(c * 0.7) for c in (r, g, b))
     return (r << 24) | (g << 16) | (b << 8) | 0xFF
 
 
-def _fit_height(pixbuf: GdkPixbuf.Pixbuf, height: int) -> GdkPixbuf.Pixbuf:
+def fit_height(pixbuf: GdkPixbuf.Pixbuf, height: int) -> GdkPixbuf.Pixbuf:
+    """At most `height` tall, never scaled up."""
     if pixbuf.get_height() <= height:
         return pixbuf
     return _scaled(pixbuf, height / pixbuf.get_height())
@@ -120,10 +161,10 @@ def _scaled(pixbuf: GdkPixbuf.Pixbuf, factor: float) -> GdkPixbuf.Pixbuf:
         return pixbuf
     width = max(1, round(pixbuf.get_width() * factor))
     height = max(1, round(pixbuf.get_height() * factor))
-    return pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.HYPER)
+    return pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
 
 
-def _ui_font() -> str:
+def ui_font() -> str:
     """The desktop's interface font family; "Sans" without a display (tests)."""
     settings = Gtk.Settings.get_default()
     name = settings.get_property("gtk-font-name") if settings else None
@@ -131,7 +172,7 @@ def _ui_font() -> str:
 
 
 def _layout(
-    cr: cairo.Context,
+    cr: "cairo.Context",
     text: str,
     family: str,
     px: float,
@@ -140,6 +181,8 @@ def _layout(
     width: float,
 ) -> Pango.Layout:
     """Centred, wrapped, at most `lines` lines with an ellipsis: like the tile's labels."""
+    from gi.repository import PangoCairo
+
     layout = PangoCairo.create_layout(cr)
     font = Pango.FontDescription()
     font.set_family(family)

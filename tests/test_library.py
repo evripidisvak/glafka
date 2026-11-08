@@ -291,3 +291,65 @@ def test_remove_cover_is_library_only(tmp_path, library):
 
     assert updated.cover_path is None and not cover.exists()
     assert parse_epub(Path(updated.files[0].file_path)).cover_image.data == b"embedded"
+
+
+def test_set_cover_says_so_when_the_library_cover_cannot_change(tmp_path, library, monkeypatch):
+    from glafka.core.metadata import CoverImage
+
+    book = library.import_file(make_epub(tmp_path / "h.epub", "Hyperion", "Dan Simmons")).book
+    monkeypatch.setattr(library, "_inside_library", lambda _path: False)
+
+    sync = library.set_cover(book.id, CoverImage("image/jpeg", b"\xff\xd8 new"))
+
+    assert sync.problems == ["the library cover was not changed: the book is outside the library"]
+    assert sync.book.cover_path is None
+
+
+def test_library_cover_matches_what_the_epub_keeps(tmp_path, library):
+    from test_epub_writer import EPUB3_OPF
+    from test_epub_writer import make_epub as make_raw_epub
+
+    from glafka.core.metadata import CoverImage
+
+    opf = EPUB3_OPF.replace(
+        '<manifest><item id="text"',
+        '<manifest><item id="c" href="cover.png" media-type="image/png" properties="cover-image"/>'
+        '<item id="text"',
+    )
+    book = library.import_file(
+        make_raw_epub(tmp_path / "t.epub", opf, extra={"cover.png": b"old png"})
+    ).book
+    covers = {
+        "image/jpeg": CoverImage("image/jpeg", b"jpeg"),
+        "image/png": CoverImage("image/png", b"png"),
+    }
+
+    updated = library.set_cover(book.id, covers).book
+
+    assert Path(updated.cover_path).name == "cover.png"
+    assert Path(updated.cover_path).read_bytes() == b"png"
+    assert parse_epub(Path(updated.files[0].file_path)).cover_image.data == b"png"
+
+
+def test_library_cover_is_what_the_epub_took_when_its_cover_was_only_guessed(tmp_path, library):
+    from test_epub_writer import EPUB3_OPF
+    from test_epub_writer import make_epub as make_raw_epub
+
+    from glafka.core.metadata import CoverImage
+
+    opf = EPUB3_OPF.replace(  # an unmarked cover.png: found by its name, never overwritten
+        '<manifest><item id="text"',
+        '<manifest><item id="c" href="cover.png" media-type="image/png"/><item id="text"',
+    )
+    book = library.import_file(
+        make_raw_epub(tmp_path / "t.epub", opf, extra={"cover.png": b"old png"})
+    ).book
+    covers = {
+        "image/jpeg": CoverImage("image/jpeg", b"jpeg"),
+        "image/png": CoverImage("image/png", b"png"),
+    }
+
+    updated = library.set_cover(book.id, covers).book
+
+    embedded = parse_epub(Path(updated.files[0].file_path)).cover_image.data
+    assert Path(updated.cover_path).read_bytes() == embedded == b"jpeg"

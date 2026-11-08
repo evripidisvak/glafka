@@ -11,12 +11,13 @@ import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from lxml import etree
 
 from glafka.core.errors import MetadataError
-from glafka.core.metadata import CoverImage
-from glafka.core.metadata.epub import find_cover_item, find_opf_path, resolve_href
+from glafka.core.metadata import CoverImage, Covers, as_covers, preferred
+from glafka.core.metadata.epub import find_cover, find_opf_path, normal_media_type, resolve_href
 from glafka.core.models import Book
 
 OPF = "http://www.idpf.org/2007/opf"
@@ -25,18 +26,35 @@ _ENC = "http://www.w3.org/2001/04/xmlenc#"
 # Font obfuscation, not DRM: keyed on the book's identifier, which is never changed here
 _FONT_OBFUSCATION = {"http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC"}
 _SERIES_ID = "glafka-series"
+SVG = "http://www.w3.org/2000/svg"
+_SIZE = re.compile(r"(\d+(?:\.\d+)?)(px|%|)")
+XHTML = "http://www.w3.org/1999/xhtml"
+# HTML elements that may be written <br/>; any other empty element keeps its end tag
+_VOID = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "wbr",
+}
+XLINK = "http://www.w3.org/1999/xlink"
 
 # OPFs come from anywhere: no entity expansion, no DTDs, no network
 _PARSER = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
 
 
-def write_epub_metadata(epub: Path, book: Book, cover: CoverImage | None = None) -> None:
-    """Put the book's title, author, series, description and tags into the EPUB,
-    and the cover image when one is given.
-
-    The file is replaced in one step; on any failure the original is untouched.
-    Raises MetadataError for EPUBs that can't or mustn't be changed (unreadable, DRM).
-    """
+def write_epub_metadata(
+    epub: Path, book: Book, cover: CoverImage | Covers | None = None
+) -> CoverImage | None:
+    """Metadata, and the cover if given, into the EPUB in one step; returns the cover it used.
+    MetadataError if it can't or mustn't change (unreadable, DRM); untouched on failure."""
     try:
         with zipfile.ZipFile(epub) as zin:
             _refuse_drm(zin)
@@ -48,10 +66,12 @@ def write_epub_metadata(epub: Path, book: Book, cover: CoverImage | None = None)
             _apply(package, book)
             replace: dict[str, bytes] = {}
             add: dict[str, bytes] = {}
+            used = None
             if cover is not None:
-                replace, add = _embed_cover(package, opf_name, set(zin.namelist()), cover)
+                replace, add, used = _embed_cover(package, opf_name, zin, as_covers(cover))
             replace[opf_name] = _serialize(package)
             _rewrite_zip(zin, epub, replace, add)
+            return used
     except zipfile.BadZipFile as e:
         raise MetadataError(f"Not a valid EPUB: {e}") from e
 
@@ -119,27 +139,40 @@ def _rewrite_zip(
 
 
 def _embed_cover(
-    package: etree._Element, opf_name: str, names: set[str], cover: CoverImage
-) -> tuple[dict[str, bytes], dict[str, bytes]]:
-    """(entries to replace, entries to add). Same format as the current cover: its bytes are
-    swapped in place, so pages showing it follow. Otherwise a new image becomes the cover and
-    the old one stays for whatever page uses it."""
+    package: etree._Element, opf_name: str, zin: zipfile.ZipFile, covers: Covers
+) -> tuple[dict[str, bytes], dict[str, bytes], CoverImage]:
+    """(replace, add, cover used); in place only for a declared, same-format cover."""
     manifest = package.find(f"{{{OPF}}}manifest")
     metadata = package.find(f"{{{OPF}}}metadata")
     if manifest is None or metadata is None:
         raise MetadataError("The package document has no <manifest> or <metadata>")
+    names = set(zin.namelist())
     elements = manifest.findall(f"{{{OPF}}}item")
     items = [
         (e.get("id", ""), e.get("href", ""), e.get("media-type", ""), e.get("properties", ""))
         for e in elements
     ]
-    cover_id = next((m.get("content") for m in _metas(metadata) if m.get("name") == "cover"), None)
+    cover_metas = _cover_metas(package)
+    cover_id = cover_metas[0].get("content") if cover_metas else None
     opf_dir = posixpath.dirname(opf_name)
-    current = find_cover_item(cover_id, items)
-    if current is not None and current[2] == cover.mime_type:
-        entry = resolve_href(opf_dir, current[1])
+    found = find_cover(cover_id, items)
+    by_property = [i for i in items if "cover-image" in i[3].split()]
+    same = covers.get(normal_media_type(found[0][2])) if found else None
+    in_place = (
+        same is not None
+        and found[1] != "guess"  # a name containing "cover" may be a back cover: never overwrite
+        and not (found[1] == "meta" and by_property and by_property[0][0] != found[0][0])
+    )
+    if in_place:
+        entry = resolve_href(opf_dir, found[0][1])
         if entry in names:
-            return {entry: cover.data}, {}
+            return (
+                {entry: same.data, **_fit_cover_pages(zin, opf_dir, items, entry, same)},
+                {},
+                same,
+            )
+
+    cover = preferred(covers)
 
     ext = "png" if cover.mime_type == "image/png" else "jpg"
     taken_ids = {item[0] for item in items}
@@ -161,8 +194,79 @@ def _embed_cover(
     new.set("media-type", cover.mime_type)
     if package.get("version", "").startswith("3"):
         new.set("properties", "cover-image")
-    _set_named_meta(metadata, "cover", stem)  # EPUB 2, and EPUB 3 readers that only look here
-    return {}, {resolve_href(opf_dir, f"{stem}.{ext}"): cover.data}
+    for meta in cover_metas:  # every marker, wherever it is, names the new cover
+        meta.set("content", stem)
+    if not cover_metas:
+        _set_named_meta(metadata, "cover", stem)  # EPUB 2, and EPUB 3 readers that only look here
+    return {}, {resolve_href(opf_dir, f"{stem}.{ext}"): cover.data}, cover
+
+
+def _fit_cover_pages(
+    zin: zipfile.ZipFile, opf_dir: str, items: list, entry: str, cover: CoverImage
+) -> dict[str, bytes]:
+    """Pages drawing the cover as SVG get its new size, or a fixed box would stretch it."""
+    if not cover.width or not cover.height:
+        return {}
+    pages = {}
+    for _id, href, media, _props in items:
+        if media not in ("application/xhtml+xml", "text/html"):
+            continue
+        name = resolve_href(opf_dir, href)
+        try:
+            raw = zin.read(name)
+        except KeyError:
+            continue
+        base = posixpath.basename(entry)
+        if not any(v.encode() in raw for v in (base, quote(base), base.replace("&", "&amp;"))):
+            continue  # cheap filter: only pages that name the image
+        try:
+            root = etree.fromstring(raw, _PARSER)
+        except etree.XMLSyntaxError:
+            continue  # not well-formed XML: left as it is
+        changed = False
+        for image in root.iter(f"{{{SVG}}}image"):
+            target = image.get(f"{{{XLINK}}}href") or image.get("href") or ""
+            if resolve_href(posixpath.dirname(name), target) != entry:
+                continue
+            svg = image.getparent()
+            while svg is not None and svg.tag != f"{{{SVG}}}svg":
+                svg = svg.getparent()
+            if svg is None or svg.get("viewBox") is None:
+                continue  # sized relative to the page (e.g. 100%): already fits any image
+            sizes = {a: _SIZE.fullmatch(image.get(a, "").strip()) for a in ("width", "height")}
+            if any(image.get(a) and not m for a, m in sizes.items()):
+                continue  # cm, em and the like: can't be matched to a viewBox, left as it is
+            svg.set("viewBox", f"0 0 {cover.width} {cover.height}")
+            for attribute, value in (("width", cover.width), ("height", cover.height)):
+                match = sizes[attribute]
+                if match and match.group(2) != "%":  # numbers and px follow; percentages stay
+                    image.set(attribute, f"{value}{match.group(2)}")
+            changed = True
+        if changed:
+            _keep_end_tags(root)
+            tree = root.getroottree()
+            encoding = tree.docinfo.encoding or "utf-8"
+            pages[name] = etree.tostring(tree, xml_declaration=True, encoding=encoding)
+    return pages
+
+
+def _keep_end_tags(root: etree._Element) -> None:
+    """<title></title>, not <title/>: readers that parse XHTML as HTML misread the short form."""
+    for element in root.iter():
+        if not isinstance(element.tag, str) or len(element) or element.text is not None:
+            continue
+        namespace, _, local = element.tag.rpartition("}")
+        if namespace.lstrip("{") in ("", XHTML) and local not in _VOID:
+            element.text = ""  # lxml then writes a start and an end tag
+
+
+def _cover_metas(package: etree._Element) -> list[etree._Element]:
+    """Non-empty <meta name="cover"> anywhere, in order: the reader takes the first one too."""
+    return [
+        e
+        for e in package.iter("{*}meta")
+        if e.get("name") == "cover" and (e.get("content") or "").strip()
+    ]
 
 
 def _apply(package: etree._Element, book: Book) -> None:
