@@ -28,7 +28,7 @@ from glafka.core.importer import (
     sanitize_component,
 )
 from glafka.core.mail import send_by_email
-from glafka.core.metadata import CoverImage, ExtractedMetadata
+from glafka.core.metadata import CoverImage, Covers, ExtractedMetadata, as_covers, preferred
 from glafka.core.metadata.epub import parse_epub
 from glafka.core.metadata.epub_writer import write_epub_metadata
 from glafka.core.metadata.pdf import parse_pdf
@@ -183,6 +183,46 @@ class LibraryManager:
         if meta.cover_image is not None:
             self._replace_cover(book, Path(file.file_path).parent, meta.cover_image)
         return self.sync_files(book.id)
+
+    def set_cover(self, book_id: str, image: CoverImage | Covers) -> FileSync:
+        """The image as cover, in the library and the book's EPUBs; saves never do this."""
+        book = self.db.get_book_by_id(book_id)
+        if book is None:
+            raise NotFoundError(f"Book '{book_id}' not found")
+        if not book.files:
+            raise GlafkaError(f"'{book.title}' has no files")
+        problems = []
+        covers = as_covers(image)
+        used = None  # what the first EPUB took: the library cover is that same file
+        for file in book.files:
+            if file.format != "epub":
+                continue  # PDFs: readers show their first page
+            path = Path(file.file_path)
+            try:
+                embedded = write_epub_metadata(path, book, cover=covers)  # each EPUB's own format
+                self.db.update_file_content(file.id, compute_sha256(path), path.stat().st_size)
+                used = used or embedded
+            except RECOVERABLE_ERRORS as e:
+                log.warning("Could not put the cover into %s: %s", path, e)
+                problems.append(f"{path.name} not updated ({e})")
+        book_dir = Path(book.files[0].file_path).parent
+        if self._inside_library(book_dir):
+            self._replace_cover(book, book_dir, used or preferred(covers))
+        else:
+            problems.append("the library cover was not changed: the book is outside the library")
+        return FileSync(self.db.get_book_by_id(book_id), problems)
+
+    def remove_cover(self, book_id: str) -> Book:
+        """Back to the generated cover. Library only: the EPUB keeps its embedded image."""
+        book = self.db.get_book_by_id(book_id)
+        if book is None:
+            raise NotFoundError(f"Book '{book_id}' not found")
+        if book.cover_path:
+            self.db.update_cover_path(book_id, None)  # index first, like delete_book
+            cover = Path(book.cover_path)
+            if self._inside_library(cover):
+                cover.unlink(missing_ok=True)
+        return self.db.get_book_by_id(book_id)
 
     def _replace_cover(self, book: Book, book_dir: Path, image: CoverImage) -> None:
         """Atomic swap; an unchanged cover is left alone (its thumbnail stays valid)."""

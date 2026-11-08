@@ -10,11 +10,12 @@ Glafka keeps your ebooks in one tidy library and gets them onto your e-reader, b
 
 - Import EPUB and PDF files, whole folders, or a Calibre library (drag and drop works too)
 - Browse by author, series and tag, as a cover grid or a list; search and sort
-- Edit details and covers; edits are written back into EPUB files, and folders are renamed to match
+- Edit details; edits are written back into EPUB files, and folders are renamed to match
+- Set a cover from any image file (or use the generated one); it goes into the EPUB too, so the reader shows it
 - Copy books to a USB e-reader in Calibre's folder layout, or email them (for example to Send-to-PocketBook)
 - See which books are on your reader: it is checked each time you plug it in
 
-Early days: version 0.2. Converting between formats is not there yet. Developed and tested on Fedora with GNOME and a PocketBook reader.
+Early days: version 0.3. Converting between formats is not there yet. Developed and tested on Fedora with GNOME and a PocketBook reader.
 
 ## Install (Fedora, GNOME)
 

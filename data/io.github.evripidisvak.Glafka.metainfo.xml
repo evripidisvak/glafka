@@ -25,6 +25,17 @@
     <color type="primary" scheme_preference="dark">#1a5fb4</color>
   </branding>
   <releases>
+    <release version="0.3.0" date="2026-11-08">
+      <description>
+        <p>Choose a book's cover.</p>
+        <ul>
+          <li>Set Cover: any image file becomes the cover, in the library and inside the EPUB, so the reader shows it too</li>
+          <li>Wide images ask whether to crop them or fit them on a book-shaped cover</li>
+          <li>Use Generated Cover puts the title-and-author cover into the EPUB; Remove Cover goes back to it in the library</li>
+          <li>Covers keep the same size in the grid and the details, whatever their shape</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-11-06">
       <description>
         <ul>

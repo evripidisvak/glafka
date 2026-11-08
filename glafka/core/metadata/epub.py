@@ -30,7 +30,7 @@ def parse_epub(epub_path: Path) -> ExtractedMetadata:
                 meta.title = epub_path.stem or "Unknown Title"
 
             if cover_href:
-                cover_name = _resolve_href(posixpath.dirname(opf_path), cover_href)
+                cover_name = resolve_href(posixpath.dirname(opf_path), cover_href)
                 try:
                     data = zf.read(cover_name)
                 except KeyError:
@@ -87,7 +87,9 @@ def parse_opf(xml: bytes | str) -> tuple[ExtractedMetadata, str | None]:
                 index = parse_series_index(content)
                 if index is not None:
                     meta.series_index = index
-            elif meta_name == "cover" and content:
+            elif (
+                meta_name == "cover" and content.strip() and cover_id is None
+            ):  # first wins, as in the writer
                 cover_id = content
             # EPUB 3 puts collection name and position in the element text, not `content`
             elif prop == "belongs-to-collection" and text and meta.series is None:
@@ -101,23 +103,37 @@ def parse_opf(xml: bytes | str) -> tuple[ExtractedMetadata, str | None]:
 
 
 def _find_cover_href(cover_id: str | None, manifest: list[_ManifestItem]) -> str | None:
+    found = find_cover(cover_id, manifest)
+    return found[0][1] if found else None
+
+
+def find_cover(
+    cover_id: str | None, manifest: list[_ManifestItem]
+) -> tuple[_ManifestItem, str] | None:
+    """The cover item and how it was found: "meta", "property", or a "guess" from its name."""
     # 1. <meta name="cover" content="item-id"> (EPUB 2)
     if cover_id:
-        for item_id, href, _, _ in manifest:
-            if item_id == cover_id:
-                return href
+        for item in manifest:
+            if item[0] == cover_id:
+                return item, "meta"
     # 2. properties="cover-image" (EPUB 3)
-    for _, href, _, props in manifest:
-        if "cover-image" in props.split():
-            return href
+    for item in manifest:
+        if "cover-image" in item[3].split():
+            return item, "property"
     # 3. and 4. Heuristics: an image whose id, then whose href, mentions "cover"
-    for item_id, href, media, _ in manifest:
-        if media.startswith("image/") and "cover" in item_id.lower():
-            return href
-    for _, href, media, _ in manifest:
-        if media.startswith("image/") and "cover" in href.lower():
-            return href
+    for item in manifest:
+        if item[2].startswith("image/") and "cover" in item[0].lower():
+            return item, "guess"
+    for item in manifest:
+        if item[2].startswith("image/") and "cover" in item[1].lower():
+            return item, "guess"
     return None
+
+
+def normal_media_type(media_type: str) -> str:
+    """'image/jpg' is common in the wild but means image/jpeg."""
+    media_type = media_type.strip().lower()
+    return "image/jpeg" if media_type in ("image/jpg", "image/pjpeg") else media_type
 
 
 def find_opf_path(zf: zipfile.ZipFile) -> str:
@@ -140,6 +156,6 @@ def find_opf_path(zf: zipfile.ZipFile) -> str:
     raise MetadataError("Could not locate OPF package document in EPUB")
 
 
-def _resolve_href(opf_dir: str, href: str) -> str:
+def resolve_href(opf_dir: str, href: str) -> str:
     """Zip entry name for an href relative to the OPF's folder."""
     return posixpath.normpath(posixpath.join(opf_dir, unquote(href)))

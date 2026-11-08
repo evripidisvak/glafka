@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 from glafka import APP_ID, __version__
 from glafka.core.config import AppConfig
@@ -22,6 +22,7 @@ from glafka.core.models import (
     HistoryAction,
 )
 from glafka.core.send import SendResult, SendStatus
+from glafka.ui import cover_image
 from glafka.ui.book_card import create_book_card, create_book_row
 from glafka.ui.book_object import BookObject
 from glafka.ui.details_pane import DetailsPane, ReaderStatus
@@ -224,6 +225,9 @@ class Window(Adw.ApplicationWindow):
             on_send=self._send,
             on_reload=self._confirm_reload,
             on_reader_action=self._on_reader_action,
+            on_set_cover=self._choose_cover,
+            on_remove_cover=self._remove_cover,
+            on_generated_cover=self._use_generated_cover,
         )
         self._overlay_split.set_sidebar(self._details.container)
         self.drive_monitor = DriveMonitor(on_change=self._on_destinations_changed)
@@ -766,6 +770,145 @@ class Window(Adw.ApplicationWindow):
     def _save_details(self) -> None:
         if self._overlay_split.get_show_sidebar():
             self._details.save()
+
+    # Covers
+
+    def _choose_cover(self, book_id: str) -> None:
+        images = Gtk.FileFilter(name="Images")
+        images.add_pixbuf_formats()  # exactly what GdkPixbuf can read here (JPEG, PNG, WebP, ...)
+        filters = Gio.ListStore(item_type=Gtk.FileFilter)
+        filters.append(images)
+        dialog = Gtk.FileDialog(title="Choose a Cover Image", filters=filters)
+
+        def chosen(dialog: Gtk.FileDialog, result: Gio.AsyncResult) -> None:
+            try:
+                file = dialog.open_finish(result)
+            except GLib.Error:
+                return  # cancelled
+            if file is not None and file.get_path():
+                self._set_cover(book_id, file.get_path())
+
+        dialog.open(self, None, chosen)
+
+    def _set_cover(self, book_id: str, path: str) -> None:
+        """Decoding a big photo takes a moment: on the worker, then back here to ask or apply."""
+        if self.library is None:
+            return
+        job = self.worker.submit(
+            self.library.root_dir,
+            lambda _library: [cover_image.load(path)],
+            on_item=lambda pixbuf: self._on_cover_loaded(job, book_id, pixbuf),
+            on_done=lambda error: self._on_image_failed(job, error) if error else None,
+        )
+
+    def _on_cover_loaded(self, job: Job, book_id: str, pixbuf: GdkPixbuf.Pixbuf) -> None:
+        if not self._is_current(job):
+            return
+        if cover_image.is_wide(pixbuf):
+            self._ask_how_to_fit(book_id, pixbuf)
+        else:
+            self._apply_cover(book_id, lambda: pixbuf)
+
+    def _on_image_failed(self, job: Job, error: Exception) -> None:
+        if self._is_current(job):
+            self.toast(f"Could not use that image: {error}")
+
+    def _ask_how_to_fit(self, book_id: str, pixbuf: GdkPixbuf.Pixbuf) -> None:
+        """A wide image: crop it, fit it on a book-shaped cover, or keep it, with previews."""
+        small = cover_image.fit_height(pixbuf, 360)  # previews only; the full one comes later
+        previews = Gtk.Box(spacing=18, halign=Gtk.Align.CENTER)
+        for label, preview in (("Crop", cover_image.crop(small)), ("Fit", cover_image.fit(small))):
+            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(cover_image.preview_png(preview)))
+            column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            column.append(Gtk.Picture(paintable=texture, can_shrink=False, css_classes=["card"]))
+            column.append(Gtk.Label(label=label, css_classes=["caption"]))
+            previews.append(column)
+        dialog = Adw.AlertDialog(
+            heading="Wide Image",
+            body="Book covers are taller than they are wide. How should this image fit?",
+            extra_child=previews,
+            default_response="fit",
+            close_response="cancel",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("as-is", "Use as Is")
+        dialog.add_response("crop", "Crop")
+        dialog.add_response("fit", "Fit")
+        dialog.set_response_appearance("fit", Adw.ResponseAppearance.SUGGESTED)
+        makers = {
+            "as-is": lambda: pixbuf,
+            "crop": lambda: cover_image.crop(pixbuf),
+            "fit": lambda: cover_image.fit(pixbuf),
+        }
+
+        def on_response(_dialog: Adw.AlertDialog, response: str) -> None:
+            if response in makers:
+                self._apply_cover(book_id, makers[response])
+
+        dialog.connect("response", on_response)
+        dialog.present(self)
+
+    def _use_generated_cover(self, book_id: str) -> None:
+        """The generated cover as an image, so the reader shows it; later edits don't follow."""
+        position = self._store_position(book_id)
+        if position is None:
+            return
+        book = self.store.get_item(position).book
+        shown = self._details.current_book
+        if (
+            shown is not None
+            and shown.book.id == book_id
+            and (
+                self._details.title_entry.get_text().strip() != book.title
+                or self._details.author_entry.get_text().strip() != book.author
+            )
+        ):
+            self.toast("Save your changes first: the cover shows the saved title and author")
+            return
+        family = cover_image.ui_font()  # GTK settings: main thread only
+        self._apply_cover(book_id, lambda: cover_image.generated(book, family))
+
+    def _apply_cover(self, book_id: str, make: Callable[[], GdkPixbuf.Pixbuf]) -> None:
+        """`make` runs on the worker: cropping, drawing and encoding never block the window."""
+        if self.library is None:
+            return
+        job = self.worker.submit(
+            self.library.root_dir,
+            lambda library: [library.set_cover(book_id, cover_image.LazyCovers(make()))],
+            on_item=lambda sync: self._on_cover_set(job, sync),
+            on_done=lambda error: self._on_cover_failed(job, error) if error else None,
+        )
+
+    def _on_cover_set(self, job: Job, sync: FileSync) -> None:
+        if not self._is_current(job) or sync.book is None:
+            return
+        self._refresh_book(sync.book)  # tile and details pane follow "changed"
+        text = f"New cover for '{sync.book.title}'"
+        self.toast(f"{text}, but: {'; '.join(sync.problems)}" if sync.problems else text)
+
+    def _on_cover_failed(self, job: Job, error: Exception) -> None:
+        if self._is_current(job):
+            self.toast(f"Could not set the cover: {error}")
+
+    def _remove_cover(self, book_id: str) -> None:
+        """On the worker, like Set Cover and file syncs: they run in the order asked."""
+        if self.library is None:
+            return
+        job = self.worker.submit(
+            self.library.root_dir,
+            lambda library: [library.remove_cover(book_id)],
+            on_item=lambda book: self._on_cover_removed(job, book),
+            on_done=lambda error: self._on_remove_failed(job, error) if error else None,
+        )
+
+    def _on_remove_failed(self, job: Job, error: Exception) -> None:
+        if self._is_current(job):
+            self.toast(f"Could not remove the cover: {error}")
+
+    def _on_cover_removed(self, job: Job, book: Book) -> None:
+        if self._is_current(job):
+            self._refresh_book(book)
+            self.toast(f"'{book.title}' has a generated cover now")
 
     def open_import_dialog(self) -> None:
         ebook_filter = Gtk.FileFilter(name="Ebook Files (*.epub, *.pdf, *.mobi)")

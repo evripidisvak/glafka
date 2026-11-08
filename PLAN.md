@@ -7,7 +7,7 @@ Spec: `SPEC.md`. Updated 2026-11-04.
 - Bugs get a failing test first, then the fix.
 - Done means: `pytest` green, `ruff check` clean, runs from GNOME Builder.
 - New work happens on a `feature/<name>` branch; one commit at the end of each work day. `main` only gets released versions, which is what installs follow (`git pull`, `meson install -C _build`).
-- Release: on the branch, bump the version in `meson.build`, `glafka/__init__.py`, a `<release>` in the metainfo and the README; commit; `git merge --ff-only` into `main`; tag `vX.Y.Z`; push `main` and the tag; delete the branch.
+- Release: on the branch, bump the version in `meson.build`, `glafka/__init__.py`, a `<release>` in the metainfo and the README; commit; push the branch and open a PR into `main` (`Closes #N` in its description); optionally `/code-review`; **Squash and merge** with the message written at merge time; tag `vX.Y.Z` on that commit; release page; reply on the issue; delete the branch.
 
 ## Status
 
@@ -70,6 +70,11 @@ Spec: `SPEC.md`. Updated 2026-11-04.
 - [x] Rename book folder and files when title or author change (`LibraryManager.sync_files`): `Title (n)` if taken; rolled back on failure; old folder removed when empty.
 - [x] PDF basic metadata (`core/metadata/pdf.py`): title and first author from the document info, page 1 rendered as the cover; poppler-utils CLI (installed, no AGPL); falls back to the file name.
 - [x] "Reload Details from File" (details pane, confirmed): EPUB first, else PDF; what the file says wins, gaps keep their values; series slot taken drops the index; cover swapped atomically (unchanged cover kept); then EPUB write-back and folder rename like a save (`LibraryManager.reload_metadata`).
+- [x] Details pane follows its book's "changed" signal (0.2.1, PR #2 by karate, issue #1): the cover redraws after saves, reloads and file syncs (only when cover file, title or author changed); fields are not refilled (unsaved edits). Also fixed: reverting a description after a save. UI-only, no automated test.
+- [x] Set Cover / Remove Cover (issue #3, decisions 2026-11-08): `core/metadata/epub_writer.py` embeds a cover (in place when the format matches, else a new `glafka-cover` item with the markers moved), `LibraryManager.set_cover` / `remove_cover`, `ui/cover_image.py` (GdkPixbuf: upright, at most 1600 px, JPEG or PNG; wide images: Crop / Fit / Use as Is dialog with previews), edit button on the details pane cover, details pane cover in the tiles' portrait frame. Deviation from the issue: the cover is embedded when it is set, not at the next sync, so a save never rewrites a Calibre-imported EPUB's cover.
+- [x] Tiles with very narrow covers came out taller than their neighbours (measured: a 178x400 thumbnail showed at 140x219): `framed_picture` caps both width and height; the details pane uses it too.
+- [x] "Use Generated Cover" (issue #3's related idea): `cover_image.generated` draws the tile's layout with Cairo and Pango at 1067x1600 in the book's colour (`style.cover_color`, shared with the tiles) and sets it like a picked image.
+- [ ] Merge two entries of the same book (e.g. a PDF and an EPUB that end up with the same title and author): with the conversion release (decision 2026-11-08).
 - [x] Bug: EPUB3 series index read from the `content` attribute instead of the element text (fixed in the port).
 - [x] Series names compare case-insensitively everywhere (conflict check, unique index via schema v4, grouping); slots taken twice by case variants resolved like imports (the later book loses the index).
 - [x] Empty series name means no series (and no index): cleaned when reading metadata and in the database layer.

@@ -1,6 +1,6 @@
 project(
   'glafka',
-  version: '0.2.1',
+  version: '0.3.0',
   meson_version: '>= 0.64.0',
   license: 'GPL-3.0-or-later',
 )
@@ -61,10 +61,12 @@ install_data(
     'glafka/ui/application.py',
     'glafka/ui/book_card.py',
     'glafka/ui/book_object.py',
+    'glafka/ui/cover_image.py',
     'glafka/ui/details_pane.py',
     'glafka/ui/group_view.py',
     'glafka/ui/history_view.py',
     'glafka/ui/job_progress.py',
+    'glafka/ui/pixbufs.py',
     'glafka/ui/preferences.py',
     'glafka/ui/drives.py',
     'glafka/ui/secrets.py',

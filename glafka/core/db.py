@@ -308,8 +308,8 @@ class Database:
 
     # Paths: stored relative to the library root, handed out absolute
 
-    def _to_db(self, path: str) -> str:
-        if self.root is None:
+    def _to_db(self, path: str | None) -> str | None:
+        if path is None or self.root is None:
             return path
         try:
             return Path(path).relative_to(self.root).as_posix()
@@ -516,14 +516,19 @@ class Database:
                 )
             self.conn.execute(
                 "UPDATE books SET cover_path = ? WHERE id = ?",
-                (self._to_db(cover_path) if cover_path is not None else None, book_id),
+                (self._to_db(cover_path), book_id),
             )
 
-    def update_cover_path(self, book_id: str, cover_path: str) -> None:
+    def update_cover_path(self, book_id: str, cover_path: str | None) -> None:
+        """None: no cover file (a generated cover is shown)."""
         with self.conn:
             self.conn.execute(
                 "UPDATE books SET cover_path = ?, updated_at = ? WHERE id = ?",
-                (self._to_db(cover_path), utc_now().isoformat(), book_id),
+                (
+                    self._to_db(cover_path),
+                    utc_now().isoformat(),
+                    book_id,
+                ),
             )
 
     def delete_book(self, book_id: str) -> None:
