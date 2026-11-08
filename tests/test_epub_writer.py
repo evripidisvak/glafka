@@ -5,7 +5,8 @@ import pytest
 from test_importer import CONTAINER
 
 from glafka.core.errors import MetadataError
-from glafka.core.metadata.epub import parse_epub
+from glafka.core.metadata import CoverImage
+from glafka.core.metadata.epub import cover_media_type, parse_epub
 from glafka.core.metadata.epub_writer import write_epub_metadata
 from glafka.core.models import Book
 
@@ -213,3 +214,80 @@ def test_new_elements_match_the_files_style(tmp_path):
     assert "opf:meta" not in text
     assert '    <meta name="calibre:series" content="New Series"/>\n' in text  # own line, indented
     assert text.rstrip().endswith("</package>")
+
+
+JPEG = CoverImage(mime_type="image/jpeg", data=b"\xff\xd8 a new jpeg cover")
+
+
+def opf_of(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        return zf.read("content.opf").decode()
+
+
+def test_cover_of_the_same_format_is_replaced_in_place(tmp_path):
+    epub = make_epub(tmp_path / "b.epub", EPUB2_OPF)
+    before = dict(entries(epub))
+
+    write_epub_metadata(epub, edited(), cover=JPEG)
+
+    after = dict(entries(epub))
+    assert after.keys() == before.keys()  # same entries: pages showing cover.jpg follow
+    assert after["cover.jpg"] == JPEG.data
+    assert after["text.xhtml"] == before["text.xhtml"]
+    assert parse_epub(epub).cover_image.data == JPEG.data
+    assert cover_media_type(epub) == "image/jpeg"
+
+
+def test_epub3_without_a_cover_gets_one_marked_both_ways(tmp_path):
+    epub = make_epub(tmp_path / "b.epub", EPUB3_OPF)
+
+    write_epub_metadata(epub, edited(), cover=JPEG)
+
+    opf = opf_of(epub)
+    assert (
+        '<item id="glafka-cover" href="glafka-cover.jpg" media-type="image/jpeg" '
+        'properties="cover-image"/>' in opf
+    )
+    assert '<meta name="cover" content="glafka-cover"/>' in opf
+    assert dict(entries(epub))["glafka-cover.jpg"] == JPEG.data
+    assert parse_epub(epub).cover_image.data == JPEG.data
+
+
+def test_epub2_without_a_cover_gets_the_meta_but_no_epub3_property(tmp_path):
+    opf = EPUB2_OPF.replace('    <meta name="cover" content="cover-img"/>\n', "").replace(
+        '    <item id="cover-img" href="cover.jpg" media-type="image/jpeg"/>\n', ""
+    )
+    epub = make_epub(tmp_path / "b.epub", opf, extra={"glafka-cover.jpg": b"taken"})
+
+    write_epub_metadata(epub, edited(), cover=JPEG)
+
+    written = opf_of(epub)
+    assert 'href="glafka-cover-2.jpg"' in written  # glafka-cover.jpg was already in the zip
+    assert "properties=" not in written
+    assert '<meta name="cover" content="glafka-cover-2"/>' in written
+    assert dict(entries(epub))["glafka-cover.jpg"] == b"taken"
+    assert parse_epub(epub).cover_image.data == JPEG.data
+
+
+def test_png_cover_replaced_by_jpeg_moves_the_marker_and_keeps_the_old_image(tmp_path):
+    opf = EPUB3_OPF.replace(
+        '<manifest><item id="text"',
+        '<manifest><item id="c" href="images/cover.png" media-type="image/png" '
+        'properties="cover-image svg"/><item id="text"',
+    )
+    epub = make_epub(tmp_path / "b.epub", opf, extra={"images/cover.png": b"old png"})
+    assert cover_media_type(epub) == "image/png"
+
+    write_epub_metadata(epub, edited(), cover=JPEG)
+
+    written = opf_of(epub)
+    assert (
+        '<item id="c" href="images/cover.png" media-type="image/png" properties="svg"/>' in written
+    )
+    assert 'properties="cover-image"' in written and 'id="glafka-cover"' in written
+    assert dict(entries(epub))["images/cover.png"] == b"old png"  # a cover page may show it
+    assert parse_epub(epub).cover_image.data == JPEG.data
+
+
+def test_cover_media_type_is_none_without_a_cover(tmp_path):
+    assert cover_media_type(make_epub(tmp_path / "b.epub", EPUB3_OPF)) is None

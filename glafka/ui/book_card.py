@@ -1,11 +1,10 @@
-import zlib
 from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from glafka.core.models import Book
 from glafka.ui.book_object import BookObject
-from glafka.ui.style import COVER_COLORS
+from glafka.ui.style import cover_color
 from glafka.ui.thumbnails import thumbnails
 
 
@@ -20,8 +19,7 @@ def load_texture(path: str | None) -> Gdk.Texture | None:
 
 def generated_cover(book: Book, width: int, height: int, with_text: bool = True) -> Gtk.Widget:
     """Stand-in for a missing cover: title and author on a tile tinted per book."""
-    # crc32, not hash(): Python's hash() changes every run, the colour must not
-    color = zlib.crc32(f"{book.title}\0{book.author}".encode()) % len(COVER_COLORS)
+    color = cover_color(book.title, book.author)
     cover = Gtk.Box(
         orientation=Gtk.Orientation.VERTICAL,
         width_request=width,
@@ -55,6 +53,31 @@ def generated_cover(book: Book, width: int, height: int, with_text: bool = True)
     return cover
 
 
+def framed_picture(
+    texture: Gdk.Texture, width: int, height: int, css: list[str] | None = None
+) -> Gtk.Widget:
+    """Exactly width x height whatever the image's shape; the rest is cropped.
+
+    A picture's natural size follows its image: clamp both ways, or a narrow cover makes
+    its tile taller and a wide one makes it wider.
+    """
+    picture = Gtk.Picture(
+        paintable=texture,
+        can_shrink=True,
+        content_fit=Gtk.ContentFit.COVER,
+        width_request=width,
+        height_request=height,
+        css_classes=css or [],
+    )
+    wide = Adw.Clamp(maximum_size=width, tightening_threshold=width, child=picture)
+    return Adw.Clamp(
+        orientation=Gtk.Orientation.VERTICAL,
+        maximum_size=height,
+        tightening_threshold=height,
+        child=wide,
+    )
+
+
 def cover_widget(book: Book, width: int, height: int, with_text: bool = True) -> Gtk.Box:
     """The book's cover thumbnail, a placeholder until it is ready, or a generated cover."""
     box = Gtk.Box(
@@ -66,18 +89,7 @@ def cover_widget(book: Book, width: int, height: int, with_text: bool = True) ->
     )
 
     def picture(texture: Gdk.Texture) -> Gtk.Widget:
-        # A picture's natural width is its image's; clamp so every cover is `width` wide
-        return Adw.Clamp(
-            maximum_size=width,
-            tightening_threshold=width,
-            child=Gtk.Picture(
-                paintable=texture,
-                can_shrink=True,
-                content_fit=Gtk.ContentFit.COVER,
-                width_request=width,
-                height_request=height,
-            ),
-        )
+        return framed_picture(texture, width, height)
 
     def show(texture: Gdk.Texture | None) -> None:
         if box.get_root() is None:

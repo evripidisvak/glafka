@@ -244,3 +244,50 @@ def test_reload_needs_an_epub_or_pdf(tmp_path, library):
 
     with pytest.raises(GlafkaError, match="EPUB and PDF"):
         library.reload_metadata(book.id)
+
+
+def test_set_cover_replaces_the_library_cover_and_the_epub_cover(tmp_path, library):
+    from glafka.core.metadata import CoverImage
+
+    book = library.import_file(
+        make_epub(tmp_path / "h.epub", "Hyperion", "Dan Simmons", cover=b"old cover")
+    ).book
+    source_query = "SELECT source_sha256 FROM book_files WHERE id = ?"
+    [(source,)] = library.db.conn.execute(source_query, (book.files[0].id,)).fetchall()
+
+    sync = library.set_cover(book.id, CoverImage("image/jpeg", b"\xff\xd8 new cover"))
+
+    updated = sync.book
+    assert sync.problems == []
+    assert Path(updated.cover_path).read_bytes() == b"\xff\xd8 new cover"
+    epub = Path(updated.files[0].file_path)
+    assert parse_epub(epub).cover_image.data == b"\xff\xd8 new cover"
+    assert updated.files[0].sha256 == compute_sha256(epub)  # the index knows the new file
+    [(still,)] = library.db.conn.execute(source_query, (book.files[0].id,)).fetchall()
+    assert still == source  # the original download is still recognised
+
+
+def test_set_cover_on_a_pdf_leaves_the_file_alone(tmp_path, library):
+    from glafka.core.metadata import CoverImage
+
+    pdf = tmp_path / "Dan Simmons - Hyperion.pdf"
+    pdf.write_bytes(b"%PDF-1.4 dummy content")
+    book = library.import_file(pdf).book
+    before = book.files[0].sha256
+
+    updated = library.set_cover(book.id, CoverImage("image/png", b"png cover")).book
+
+    assert Path(updated.cover_path).name == "cover.png"
+    assert updated.files[0].sha256 == before == compute_sha256(Path(updated.files[0].file_path))
+
+
+def test_remove_cover_is_library_only(tmp_path, library):
+    book = library.import_file(
+        make_epub(tmp_path / "h.epub", "Hyperion", "Dan Simmons", cover=b"embedded")
+    ).book
+    cover = Path(book.cover_path)
+
+    updated = library.remove_cover(book.id)
+
+    assert updated.cover_path is None and not cover.exists()
+    assert parse_epub(Path(updated.files[0].file_path)).cover_image.data == b"embedded"

@@ -4,8 +4,10 @@ lxml, not xml.etree: etree rewrites namespace prefixes (<ns0:package>), which so
 """
 
 import os
+import posixpath
 import re
 import shutil
+import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +15,8 @@ from pathlib import Path
 from lxml import etree
 
 from glafka.core.errors import MetadataError
-from glafka.core.metadata.epub import find_opf_path
+from glafka.core.metadata import CoverImage
+from glafka.core.metadata.epub import find_cover_item, find_opf_path, resolve_href
 from glafka.core.models import Book
 
 OPF = "http://www.idpf.org/2007/opf"
@@ -27,8 +30,9 @@ _SERIES_ID = "glafka-series"
 _PARSER = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
 
 
-def write_epub_metadata(epub: Path, book: Book) -> None:
-    """Put the book's title, author, series, description and tags into the EPUB.
+def write_epub_metadata(epub: Path, book: Book, cover: CoverImage | None = None) -> None:
+    """Put the book's title, author, series, description and tags into the EPUB,
+    and the cover image when one is given.
 
     The file is replaced in one step; on any failure the original is untouched.
     Raises MetadataError for EPUBs that can't or mustn't be changed (unreadable, DRM).
@@ -42,8 +46,12 @@ def write_epub_metadata(epub: Path, book: Book) -> None:
             except (KeyError, etree.XMLSyntaxError) as e:
                 raise MetadataError(f"Unreadable package document {opf_name}: {e}") from e
             _apply(package, book)
-            opf = _serialize(package)
-            _rewrite_zip(zin, epub, opf_name, opf)
+            replace: dict[str, bytes] = {}
+            add: dict[str, bytes] = {}
+            if cover is not None:
+                replace, add = _embed_cover(package, opf_name, set(zin.namelist()), cover)
+            replace[opf_name] = _serialize(package)
+            _rewrite_zip(zin, epub, replace, add)
     except zipfile.BadZipFile as e:
         raise MetadataError(f"Not a valid EPUB: {e}") from e
 
@@ -78,7 +86,10 @@ def _refuse_drm(zin: zipfile.ZipFile) -> None:
         raise MetadataError("The EPUB is DRM-protected; it is left unchanged")
 
 
-def _rewrite_zip(zin: zipfile.ZipFile, epub: Path, opf_name: str, opf: bytes) -> None:
+def _rewrite_zip(
+    zin: zipfile.ZipFile, epub: Path, replace: dict[str, bytes], add: dict[str, bytes]
+) -> None:
+    """Every entry copied as is, except the ones in `replace`; then the new ones in `add`."""
     tmp = epub.with_name(f".{epub.name}.{os.getpid()}.tmp")
     try:
         with zipfile.ZipFile(tmp, "w") as zout:
@@ -90,8 +101,8 @@ def _rewrite_zip(zin: zipfile.ZipFile, epub: Path, opf_name: str, opf: bytes) ->
                 entry = zipfile.ZipInfo(info.filename, date_time=info.date_time)
                 entry.compress_type = info.compress_type
                 entry.external_attr = info.external_attr
-                if info.filename == opf_name:
-                    zout.writestr(entry, opf)
+                if info.filename in replace:
+                    zout.writestr(entry, replace[info.filename])
                 elif info.is_dir():
                     zout.writestr(entry, b"")
                 else:
@@ -99,10 +110,59 @@ def _rewrite_zip(zin: zipfile.ZipFile, epub: Path, opf_name: str, opf: bytes) ->
                     # Streamed, not read(): a 60 MB illustrated book must not sit in memory
                     with zin.open(info) as src, zout.open(entry, "w") as dst:
                         shutil.copyfileobj(src, dst)
+            for name, data in add.items():  # stored: images don't compress
+                zout.writestr(zipfile.ZipInfo(name, date_time=time.localtime()[:6]), data)
         os.replace(tmp, epub)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def _embed_cover(
+    package: etree._Element, opf_name: str, names: set[str], cover: CoverImage
+) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    """(entries to replace, entries to add). Same format as the current cover: its bytes are
+    swapped in place, so pages showing it follow. Otherwise a new image becomes the cover and
+    the old one stays for whatever page uses it."""
+    manifest = package.find(f"{{{OPF}}}manifest")
+    metadata = package.find(f"{{{OPF}}}metadata")
+    if manifest is None or metadata is None:
+        raise MetadataError("The package document has no <manifest> or <metadata>")
+    elements = manifest.findall(f"{{{OPF}}}item")
+    items = [
+        (e.get("id", ""), e.get("href", ""), e.get("media-type", ""), e.get("properties", ""))
+        for e in elements
+    ]
+    cover_id = next((m.get("content") for m in _metas(metadata) if m.get("name") == "cover"), None)
+    opf_dir = posixpath.dirname(opf_name)
+    current = find_cover_item(cover_id, items)
+    if current is not None and current[2] == cover.mime_type:
+        entry = resolve_href(opf_dir, current[1])
+        if entry in names:
+            return {entry: cover.data}, {}
+
+    ext = "png" if cover.mime_type == "image/png" else "jpg"
+    taken_ids = {item[0] for item in items}
+    n = 1
+    while True:
+        stem = "glafka-cover" if n == 1 else f"glafka-cover-{n}"
+        if stem not in taken_ids and resolve_href(opf_dir, f"{stem}.{ext}") not in names:
+            break
+        n += 1
+    for element in elements:  # only one item may carry the cover-image property
+        tokens = element.get("properties", "").split()
+        if "cover-image" in tokens:
+            tokens.remove("cover-image")
+            if tokens:
+                element.set("properties", " ".join(tokens))
+            else:
+                del element.attrib["properties"]
+    new = _append(manifest, f"{{{OPF}}}item", id=stem, href=f"{stem}.{ext}")
+    new.set("media-type", cover.mime_type)
+    if package.get("version", "").startswith("3"):
+        new.set("properties", "cover-image")
+    _set_named_meta(metadata, "cover", stem)  # EPUB 2, and EPUB 3 readers that only look here
+    return {}, {resolve_href(opf_dir, f"{stem}.{ext}"): cover.data}
 
 
 def _apply(package: etree._Element, book: Book) -> None:

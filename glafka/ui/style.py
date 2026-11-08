@@ -1,4 +1,12 @@
+import zlib
+
 from gi.repository import Gdk, Gtk
+
+
+def cover_color(title: str, author: str) -> int:
+    """Index into COVER_COLORS; crc32, not hash(): Python's hash() changes every run."""
+    return zlib.crc32(f"{title}\0{author}".encode()) % len(COVER_COLORS)
+
 
 # Generated covers: dark tints (GNOME palette) so white text stays readable
 COVER_COLORS = [

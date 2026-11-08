@@ -519,6 +519,13 @@ class Database:
                 (self._to_db(cover_path) if cover_path is not None else None, book_id),
             )
 
+    def clear_cover_path(self, book_id: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE books SET cover_path = NULL, updated_at = ? WHERE id = ?",
+                (utc_now().isoformat(), book_id),
+            )
+
     def update_cover_path(self, book_id: str, cover_path: str) -> None:
         with self.conn:
             self.conn.execute(

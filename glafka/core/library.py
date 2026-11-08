@@ -184,6 +184,44 @@ class LibraryManager:
             self._replace_cover(book, Path(file.file_path).parent, meta.cover_image)
         return self.sync_files(book.id)
 
+    def set_cover(self, book_id: str, image: CoverImage) -> FileSync:
+        """Use the image as the cover: in the library, and inside the book's EPUBs.
+
+        Only on this explicit action: a save never rewrites an EPUB's cover, even when the
+        library cover differs (a Calibre import's cover.jpg often does).
+        """
+        book = self.db.get_book_by_id(book_id)
+        if book is None:
+            raise NotFoundError(f"Book '{book_id}' not found")
+        if not book.files:
+            raise GlafkaError(f"'{book.title}' has no files")
+        self._replace_cover(book, Path(book.files[0].file_path).parent, image)
+        book = self.db.get_book_by_id(book_id)
+        problems = []
+        for file in book.files:
+            if file.format != "epub":
+                continue  # PDFs: readers show their first page
+            path = Path(file.file_path)
+            try:
+                write_epub_metadata(path, book, cover=image)
+                self.db.update_file_content(file.id, compute_sha256(path), path.stat().st_size)
+            except RECOVERABLE_ERRORS as e:
+                log.warning("Could not put the cover into %s: %s", path, e)
+                problems.append(f"{path.name} not updated ({e})")
+        return FileSync(self.db.get_book_by_id(book_id), problems)
+
+    def remove_cover(self, book_id: str) -> Book:
+        """Back to the generated cover. Library only: the EPUB keeps its embedded image."""
+        book = self.db.get_book_by_id(book_id)
+        if book is None:
+            raise NotFoundError(f"Book '{book_id}' not found")
+        if book.cover_path:
+            self.db.clear_cover_path(book_id)  # index first, like delete_book
+            cover = Path(book.cover_path)
+            if self._inside_library(cover):
+                cover.unlink(missing_ok=True)
+        return self.db.get_book_by_id(book_id)
+
     def _replace_cover(self, book: Book, book_dir: Path, image: CoverImage) -> None:
         """Atomic swap; an unchanged cover is left alone (its thumbnail stays valid)."""
         old = Path(book.cover_path) if book.cover_path else None

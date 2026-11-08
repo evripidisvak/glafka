@@ -1,11 +1,12 @@
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, Gio, Gtk
 
 from glafka.core.models import Book, Destination
 from glafka.core.text import html_to_text
-from glafka.ui.book_card import generated_cover, load_texture
+from glafka.ui.book_card import framed_picture, generated_cover, load_texture
 from glafka.ui.book_object import BookObject
 
 # (book_id, title, author, series, series_index, description, tags)
@@ -33,10 +34,28 @@ class DetailsPane:
         on_send: Callable[[str, str], None],  # (book id, destination id)
         on_reload: Callable[[str], None],
         on_reader_action: Callable[[str, str, str], None],  # (book id, destination id, action)
+        on_set_cover: Callable[[str], None],
+        on_remove_cover: Callable[[str], None],
+        on_generated_cover: Callable[[str], None],
     ) -> None:
         self._on_save = on_save
         self._on_send = on_send
         self._on_reader_action = on_reader_action
+        actions = Gio.SimpleActionGroup()
+        for name, callback in (
+            ("set-cover", on_set_cover),
+            ("remove-cover", on_remove_cover),
+            ("generated-cover", on_generated_cover),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect(
+                "activate",
+                lambda _a, _p, cb=callback: (
+                    cb(self.current_book.book.id) if self.current_book else None
+                ),
+            )
+            actions.add_action(action)
+        self._remove_cover_action = actions.lookup_action("remove-cover")
         self.current_book: BookObject | None = None
         self._shown_description = ""  # as displayed: plain text even if stored as HTML
         self._changed_handler: int | None = None  # on current_book's "changed"
@@ -47,6 +66,7 @@ class DetailsPane:
             width_request=340,
             css_classes=["view", "background"],
         )
+        self.container.insert_action_group("pane", actions)
 
         # Header: Save on the left, Close on the right; no window buttons in this sub-header
         header = Adw.HeaderBar(
@@ -73,7 +93,23 @@ class DetailsPane:
         )
 
         self.cover_slot = Gtk.Box(halign=Gtk.Align.CENTER)  # real cover or a generated one
-        content.append(self.cover_slot)
+        cover_menu = Gio.Menu()
+        cover_menu.append("Set Cover…", "pane.set-cover")
+        cover_menu.append("Use Generated Cover", "pane.generated-cover")
+        cover_menu.append("Remove Cover", "pane.remove-cover")
+        cover_button = Gtk.MenuButton(
+            icon_name="document-edit-symbolic",
+            menu_model=cover_menu,
+            tooltip_text="Change Cover",
+            halign=Gtk.Align.END,
+            valign=Gtk.Align.END,
+            margin_end=6,
+            margin_bottom=6,
+            css_classes=["osd", "circular"],
+        )
+        cover_overlay = Gtk.Overlay(child=self.cover_slot, halign=Gtk.Align.CENTER)
+        cover_overlay.add_overlay(cover_button)
+        content.append(cover_overlay)
 
         # One button per destination available now; see set_send_targets
         self._send_box = Gtk.Box(
@@ -244,6 +280,7 @@ class DetailsPane:
             return
         self._changed_handler = book_obj.connect("changed", self._on_book_changed)
         book = book_obj.book
+        self._remove_cover_action.set_enabled(bool(book.cover_path))
         self._cover_key = None
         self._show_cover(book)
         self.title_entry.set_text(book.title)
@@ -267,10 +304,15 @@ class DetailsPane:
         """A save, reload or file sync updated the book. Fields are not refilled:
         they may hold edits not saved yet (a file sync can finish seconds later)."""
         self._show_cover(book_obj.book)
+        self._remove_cover_action.set_enabled(bool(book_obj.book.cover_path))
         self._shown_description = html_to_text(book_obj.book.description or "")
 
     def _show_cover(self, book: Book) -> None:
-        key = (book.cover_path, book.title, book.author)  # a generated cover draws title and author
+        try:  # a new image saved as the same cover.jpg must redraw too
+            mtime = os.stat(book.cover_path).st_mtime_ns if book.cover_path else None
+        except OSError:
+            mtime = None
+        key = (book.cover_path, mtime, book.title, book.author)  # generated: title and author
         if key == self._cover_key:
             return  # e.g. only the series changed: keep the image already decoded
         self._cover_key = key
@@ -278,13 +320,8 @@ class DetailsPane:
             self.cover_slot.remove(child)
         texture = load_texture(book.cover_path)
         if texture is not None:
-            cover: Gtk.Widget = Gtk.Picture(
-                paintable=texture,
-                height_request=240,
-                can_shrink=True,
-                content_fit=Gtk.ContentFit.SCALE_DOWN,
-                css_classes=["card"],
-            )
+            # The tiles' portrait frame: any image shape is cropped, never stretched
+            cover: Gtk.Widget = framed_picture(texture, 168, 240, ["card"])
         else:
             cover = generated_cover(book, 168, 240)
             cover.add_css_class("card")
