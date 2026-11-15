@@ -2,6 +2,9 @@ import zlib
 
 from gi.repository import Gdk, Gtk
 
+READER_ICON = "io.github.evripidisvak.Glafka-ereader-symbolic"  # ships in data/icons
+EMAILED_ICON = "mail-unread-symbolic"
+
 
 def cover_color(title: str, author: str) -> int:
     """Index into COVER_COLORS; crc32, not hash(): Python's hash() changes every run."""

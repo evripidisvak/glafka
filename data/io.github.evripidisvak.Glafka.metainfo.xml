@@ -25,6 +25,18 @@
     <color type="primary" scheme_preference="dark">#1a5fb4</color>
   </branding>
   <releases>
+    <release version="0.3.1" date="2026-11-15">
+      <description>
+        <p>See emailed books on their way to the reader.</p>
+        <ul>
+          <li>Emailed books carry an envelope badge until a scan finds them on the reader, then the e-reader badge</li>
+          <li>Mark as Removed for an email that never arrived</li>
+          <li>The reader badge is now an e-reader instead of a USB drive</li>
+          <li>Deleting a reader in Preferences updates the badges right away</li>
+        </ul>
+        <p>The library database is upgraded on first start; older versions cannot open it after that.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-08">
       <description>
         <p>Choose a book's cover.</p>

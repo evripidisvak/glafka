@@ -375,3 +375,32 @@ def test_v9_history_keeps_old_entries_and_outlives_deleted_books(tmp_path):
     db.delete_book("b")
     kept = db.history()
     assert [(e.book_id, e.book_title) for e in kept] == [(None, "Hyperion"), (None, "Hyperion")]
+
+
+def test_v10_marks_recent_emails_not_yet_found_on_the_reader(tmp_path):
+    path = tmp_path / "library.db"
+    conn = _db_at_version(path, 9)
+    conn.executescript(
+        "INSERT INTO books (id, title, author, created_at, updated_at) VALUES "
+        "('old', 'Old', 'A', '2026', '2026'), ('new', 'New', 'A', '2026', '2026'), "
+        "('there', 'There', 'A', '2026', '2026');"
+        "INSERT INTO destinations "
+        "(id, name, kind, books_folder, formats, created_at, last_checked) "
+        "VALUES ('d', 'Era Lite', 'usb', 'Books', 'epub', '2026', '2026-11-01T10:00:00+00:00'), "
+        "('m', 'SendToPb', 'email', '', 'epub', '2026', NULL);"
+        "INSERT INTO on_device VALUES ('d', 'there', 'SendToPb/There.epub', '2026');"
+        "INSERT INTO history (id, book_id, book_title, book_author, action, destination_id, "
+        "destination_kind, destination_name, at) VALUES "
+        "('1', 'old', 'Old', 'A', 'sent', 'm', 'email', 'SendToPb', '2026-10-31T10:00:00+00:00'), "
+        "('2', 'new', 'New', 'A', 'sent', 'm', 'email', 'SendToPb', '2026-11-02T10:00:00+00:00'), "
+        "('3', 'new', 'New', 'A', 'sent', 'gone', 'email', 'Old', '2026-11-02T10:00:00+00:00'), "
+        "('4', 'there', 'There', 'A', 'sent', 'm', 'email', 'Pb', '2026-11-02T11:00:00+00:00');"
+    )
+    conn.close()
+
+    db = Database.open(path, tmp_path)
+
+    # old: before the last check; there: found; 'gone': destination deleted
+    assert db.emails_pending() == {("new", "m")}
+    db.delete_book("new")
+    assert db.emails_pending() == set()

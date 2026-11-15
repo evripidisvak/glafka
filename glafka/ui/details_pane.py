@@ -20,7 +20,8 @@ class ReaderStatus:
     destination_id: str
     title: str
     detail: str
-    action: tuple[str, str] | None = None  # ("delete" | "forget", button label)
+    action: tuple[str, str] | None = None  # ("delete" | "forget" | "forget-email", label)
+    icon: str | None = None
 
 
 class DetailsPane:
@@ -236,6 +237,8 @@ class DetailsPane:
         self._status_rows.clear()
         for status in rows:
             row = Adw.ActionRow(title=status.title, subtitle=status.detail, use_markup=False)
+            if status.icon:
+                row.add_prefix(Gtk.Image(icon_name=status.icon))
             if status.action is not None:
                 action, label = status.action
                 button = Gtk.Button(

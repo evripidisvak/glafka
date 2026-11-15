@@ -22,3 +22,8 @@ install_data(
   'icons/hicolor/symbolic/apps/io.github.evripidisvak.Glafka-symbolic.svg',
   install_dir: datadir / 'icons' / 'hicolor' / 'symbolic' / 'apps'
 )
+
+install_data(
+  'icons/hicolor/scalable/actions/io.github.evripidisvak.Glafka-ereader-symbolic.svg',
+  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'actions'
+)

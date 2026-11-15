@@ -24,7 +24,7 @@ from glafka.core.models import (
 from glafka.core.send import SendResult, SendStatus
 from glafka.ui import cover_image
 from glafka.ui.book_card import create_book_card, create_book_row
-from glafka.ui.book_object import BookObject
+from glafka.ui.book_object import Badge, BookObject
 from glafka.ui.details_pane import DetailsPane, ReaderStatus
 from glafka.ui.drives import DriveMonitor
 from glafka.ui.group_view import GroupView
@@ -36,6 +36,7 @@ from glafka.ui.preferences import (
     show_preferences_dialog,
 )
 from glafka.ui.secrets import lookup_password
+from glafka.ui.style import EMAILED_ICON, READER_ICON
 from glafka.ui.thumbnails import thumbnails
 from glafka.ui.trash import move_to_trash
 from glafka.ui.worker import Job, LibraryWorker
@@ -67,7 +68,7 @@ CATEGORIES = [
     ("Authors", "avatar-default-symbolic"),
     ("Series", "media-playlist-consecutive-symbolic"),
     ("Tags", "folder-saved-search-symbolic"),
-    ("On Reader", "media-removable-symbolic"),
+    ("On Reader", READER_ICON),
     ("History", "document-open-recent-symbolic"),
 ]
 
@@ -148,6 +149,8 @@ class Window(Adw.ApplicationWindow):
         # (title, detail) shown instead of the grid while the library can't be used
         self._error: tuple[str, str] | None = None
         self._on_reader_ids: set[str] = set()  # on a USB reader at its last check
+        self._emails_pending: set[tuple[str, str]] = set()  # (book, destination) not found since
+        self._badges: dict[str, Badge] = {}  # book id -> its one badge
         self._scanned_mounts: set[str] = set()  # plugged-in destinations already scanned
         self._pending_sends: set[Job] = set()
         self._destinations: list[Destination] = []
@@ -719,13 +722,10 @@ class Window(Adw.ApplicationWindow):
             books = []
         else:
             self._error = None
-        try:
-            self._on_reader_ids = self.library.books_on_readers()
-        except RECOVERABLE_ERRORS as e:
-            log.warning("Could not load which books are on readers: %s", e)
-        on_reader = self._on_reader_ids
+        self._load_badges()
+        badges = self._badges
         self.store.splice(
-            0, self.store.get_n_items(), [BookObject(b, b.id in on_reader) for b in books]
+            0, self.store.get_n_items(), [BookObject(b, badges.get(b.id)) for b in books]
         )
         self._update_view()
 
@@ -1084,6 +1084,7 @@ class Window(Adw.ApplicationWindow):
         if self.library is not None:
             self.library.delete_destination(destination_id)
             self._load_destinations()
+            self._refresh_on_reader()  # its badges went with it
 
     def _on_destinations_changed(self) -> None:
         """Drives come and go (signals arrive in bursts); scan each reader once per plug-in."""
@@ -1129,24 +1130,30 @@ class Window(Adw.ApplicationWindow):
 
     def _refresh_on_reader(self) -> None:
         """Badges, the On Reader list and the details pane, from the index."""
-        if self.library is None:
-            return
-        try:
-            self._on_reader_ids = self.library.books_on_readers()
-        except RECOVERABLE_ERRORS as e:
-            log.warning("Could not load which books are on readers: %s", e)
+        if self.library is None or not self._load_badges():
             return
         for i in range(self.store.get_n_items()):
             book_obj = self.store.get_item(i)
-            on_reader = book_obj.book.id in self._on_reader_ids
-            if book_obj.on_reader != on_reader:
-                book_obj.on_reader = on_reader
+            badge = self._badges.get(book_obj.book.id)
+            if book_obj.badge is not badge:
+                book_obj.badge = badge
                 book_obj.emit("changed")  # flat views redraw the tile
         if self._category == "On Reader":
             self._filter.changed(Gtk.FilterChange.DIFFERENT)
         self._schedule_regroup()
         self._update_reader_status()
         self._refresh_history()
+
+    def _load_badges(self) -> bool:
+        try:
+            self._on_reader_ids = self.library.books_on_readers()
+            self._emails_pending = self.library.emails_pending()
+        except RECOVERABLE_ERRORS as e:
+            log.warning("Could not load which books are on readers: %s", e)
+            return False
+        self._badges = {book_id: Badge.EMAILED for book_id, _ in self._emails_pending}
+        self._badges.update(dict.fromkeys(self._on_reader_ids, Badge.READER))  # reader wins
+        return True
 
     def _refresh_history(self) -> None:
         """Rebuild the History page, only while it is showing."""
@@ -1195,8 +1202,19 @@ class Window(Adw.ApplicationWindow):
                 None,
             )
             if sent is not None:
-                seen = "" if copies else ", not seen on a reader yet"
-                rows.append(ReaderStatus(dest.id, f"Emailed to {dest.name}", _when(sent.at) + seen))
+                waiting = (
+                    self._badges.get(book_id) is Badge.EMAILED
+                    and (book_id, dest.id) in self._emails_pending
+                )
+                rows.append(
+                    ReaderStatus(
+                        dest.id,
+                        f"Emailed to {dest.name}",
+                        _when(sent.at) + (", not seen on a reader yet" if waiting else ""),
+                        ("forget-email", "Mark as Removed") if waiting else None,
+                        EMAILED_ICON if waiting else "mail-send-symbolic",  # as in History
+                    )
+                )
         self._details.set_reader_status(rows)
         self._details.set_history(
             [(describe(e)[0], details(e, with_date=True), describe(e)[1]) for e in history]
@@ -1214,6 +1232,14 @@ class Window(Adw.ApplicationWindow):
                 return
             self._refresh_on_reader()
             self.toast(f"Marked as removed from {dest.name}")
+        elif action == "forget-email":
+            try:
+                self.library.forget_email(dest, book_id)
+            except RECOVERABLE_ERRORS as e:
+                self.toast(f"Could not change it: {e}")
+                return
+            self._refresh_on_reader()
+            self.toast(f"No longer waiting for '{dest.name}' to deliver it")
         elif action == "delete":
             self._confirm_remove_from_reader(book_id, dest)
 
@@ -1341,8 +1367,7 @@ class Window(Adw.ApplicationWindow):
         match result.status:
             case SendStatus.SENT | SendStatus.ALREADY_THERE:
                 if destination.kind == "email":
-                    self._update_reader_status()
-                    self._refresh_history()
+                    self._refresh_on_reader()  # mail badge; also refreshes status and history
                     self.toast(f"Emailed '{title}' to {destination.name}")
                     return
                 self._refresh_on_reader()
@@ -1478,7 +1503,10 @@ def _usb_status(dest: Destination, copies: list[DeviceCopy], connected: bool) ->
     mine = [c for c in copies if c.destination_id == dest.id]
     if not mine:
         return ReaderStatus(
-            dest.id, f"Not on {dest.name}", f"Checked {when}" if when else "Not checked yet"
+            dest.id,
+            f"Not on {dest.name}",
+            f"Checked {when}" if when else "Not checked yet",
+            icon=READER_ICON,
         )
     checked = f"checked {when}" if when else "not checked yet"
     folders = ", ".join(sorted({c.path.split("/")[0] + "/" for c in mine}))
@@ -1487,4 +1515,4 @@ def _usb_status(dest: Destination, copies: list[DeviceCopy], connected: bool) ->
         action = ("delete", "Delete")
     elif not connected:
         action = ("forget", "Mark as Removed")
-    return ReaderStatus(dest.id, f"On {dest.name}", f"In {folders}, {checked}", action)
+    return ReaderStatus(dest.id, f"On {dest.name}", f"In {folders}, {checked}", action, READER_ICON)

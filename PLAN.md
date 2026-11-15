@@ -90,6 +90,7 @@ Spec: `SPEC.md`. Updated 2026-11-04.
   - `core/mail.py` (smtplib, CRLF message, server SIZE limit checked before login), `ui/secrets.py` (async libsecret), schema v6 (`email` column), Preferences: Email Account group and Add Email Address.
   - First real send 2026-10-31 (9.2 MB EPUB): arrived in `SendToPb/` under Glafka's file name, identical to the library file. Still unseen: non-ASCII titles (RFC 2231 encoded names).
   - Send buttons name the route: "Copy to <reader>" (USB icon) and "Email to <reader>" (mail icon); two "Send to" buttons were confusing.
+- [x] Emailed badge (0.3.1, decisions 2026-11-15): schema v10 `email_pending` (per book and email destination, gone with either; set by a successful email; cleared when a scan finds the book or a USB copy lands; on upgrade, emails since the reader's last check that no scan found), envelope badge `mail-unread-symbolic` until then, details pane email row with Mark as Removed while waiting and not on a reader (the wait is still recorded, so the envelope returns if a scan misses the book). Reader badge is now the app's own e-reader icon (`data/icons/.../actions`), also on the On Reader category and the USB status rows. Deleting a destination now refreshes the badges (USB ones stayed until restart).
 
 ## Phase 5: Convert (milestone 5)
 - [ ] `Converter` interface in core.
@@ -123,3 +124,5 @@ Spec: `SPEC.md`. Updated 2026-11-04.
 - 2026-10-31: USB sending: user's reader is a PocketBook (label `PB710`, FAT32, mounted at `/run/media/<user>/PB710`). Calibre managed it before (`metadata.calibre`, `driveinfo.calibre`; books in `Books/<Last, First>/<Title> - <Author>.epub`). Glafka uses the same `Books/` folder and Calibre's layout; never touches `metadata.calibre`, `driveinfo.calibre`, `SendToPb/` (Send-to-PocketBook cloud) or `.Trash-1000`. A different copy at the same path is replaced only after the user confirms (resets reading position).
 - 2026-10-31: All Books icon: open book (`accessories-dictionary-symbolic`); books without a cover get a generated cover (title and author on a tinted tile).
 - 2026-10-31: optional "move" import: originals go to the Trash (not deleted) after a successful import, including identical duplicates; never skipped, failed or Calibre files.
+- 2026-11-15: emailed books get an envelope badge until a scan finds them on the reader (then the e-reader badge; a later scan without them, no badge); one badge at a time. Mark as Removed clears an email that never arrived. Reader badge: own e-reader icon instead of the USB drive icon.
+- 2026-11-15: emailing a book already on a reader still starts the wait, but the details pane shows it only while the book is off the reader (no contradicting rows; a stale "on the reader" can't hide an email on its way).

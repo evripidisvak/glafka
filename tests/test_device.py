@@ -32,6 +32,12 @@ def era_lite(library):
     return next(d for d in library.get_destinations() if d.id == "usb")
 
 
+def email_destination(library, id="mail", name="SendToPb"):
+    cloud = Destination(id=id, name=name, kind="email", books_folder="", email=f"{id}@b.org")
+    library.add_destination(cloud)
+    return cloud
+
+
 def add_book(library, tmp_path, title, author="Tana French"):
     return library.import_file(make_epub(tmp_path / f"{title}.epub", title, author)).book
 
@@ -173,3 +179,56 @@ def test_history_actions_are_distinct():
     # A stray @dataclass on the enum once made every action compare equal
     assert HistoryAction.DELETED != HistoryAction.SENT
     assert len(set(HistoryAction)) == 4
+
+
+def test_emailed_badge_until_a_scan_finds_the_book_then_gone_when_it_is_gone(
+    tmp_path, library, reader
+):
+    book = add_book(library, tmp_path, "The Trespasser")
+    cloud = email_destination(library)
+    library.db.set_email_pending(book.id, cloud.id)  # as an email send does
+
+    library.scan_device(era_lite(library), reader)  # not synced to the reader yet
+    assert library.emails_pending() == {(book.id, cloud.id)}  # still on its way
+
+    delivered = reader / "SendToPb/The Trespasser - Tana French.epub"
+    shutil.copy(book.files[0].file_path, delivered)
+    library.scan_device(era_lite(library), reader)
+    assert library.emails_pending() == set()
+    assert library.books_on_readers() == {book.id}
+
+    delivered.unlink()
+    library.scan_device(era_lite(library), reader)
+    assert library.emails_pending() == set() and library.books_on_readers() == set()
+
+
+def test_a_usb_copy_clears_the_emailed_badge(tmp_path, library, reader):
+    book = add_book(library, tmp_path, "Broken Harbour")
+    library.db.set_email_pending(book.id, email_destination(library).id)
+
+    library.send_to_usb(book.id, era_lite(library), reader)
+
+    assert library.emails_pending() == set()
+
+
+def test_mark_as_removed_clears_only_that_destination_s_email(tmp_path, library):
+    book = add_book(library, tmp_path, "Broken Harbour")
+    cloud, other = email_destination(library), email_destination(library, "kindle", "Kindle")
+    library.db.set_email_pending(book.id, cloud.id)
+    library.db.set_email_pending(book.id, other.id)
+
+    library.forget_email(cloud, book.id)
+
+    assert library.emails_pending() == {(book.id, other.id)}
+    assert library.history(book.id)[0].action == HistoryAction.MARKED_REMOVED
+
+
+def test_deleting_the_email_destination_ends_the_wait(tmp_path, library):
+    book = add_book(library, tmp_path, "Broken Harbour")
+    cloud = email_destination(library)
+    library.db.set_email_pending(book.id, cloud.id)
+
+    library.delete_destination(cloud.id)  # its status row and Mark as Removed go with it
+    library.db.set_email_pending(book.id, cloud.id)  # an email finishing afterwards
+
+    assert library.emails_pending() == set()

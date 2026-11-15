@@ -356,6 +356,16 @@ class LibraryManager:
         """Newest first; one book's, or the whole library's."""
         return self.db.history(book_id)
 
+    def emails_pending(self) -> set[tuple[str, str]]:
+        return self.db.emails_pending()
+
+    def forget_email(self, destination: Destination, book_id: str) -> None:
+        """Mark as Removed for an emailed book that never showed up on the reader."""
+        self.db.clear_email_pending(book_id, destination.id)
+        book = self.db.get_book_by_id(book_id)
+        if book is not None:
+            record(self.db, book, destination, HistoryAction.MARKED_REMOVED)
+
     def forget_device_copies(self, destination: Destination, book_id: str) -> None:
         """Mark as Removed: off that reader until the next scan says otherwise."""
         self.db.remove_device_copies(destination.id, book_id)

@@ -83,6 +83,8 @@ def book(library, tmp_path):
 
 
 def test_email_carries_the_book_and_is_logged(smtp, library, book):
+    library.add_destination(CLOUD)
+
     result = library.send_by_email(book.id, CLOUD, GMAIL, "app password")
 
     assert result.status is SendStatus.SENT
@@ -101,6 +103,7 @@ def test_email_carries_the_book_and_is_logged(smtp, library, book):
     with open(book.files[0].file_path, "rb") as f:
         assert attachment.get_content() == f.read()
     assert library.books_on_readers() == set()  # on the reader only once a scan finds it
+    assert library.emails_pending() == {(book.id, CLOUD.id)}  # mail badge meanwhile
     [entry] = library.history(book.id)
     assert (entry.destination_kind, entry.destination_name, entry.action) == (
         "email",
