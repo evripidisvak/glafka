@@ -3,8 +3,8 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from glafka.core.models import Book
-from glafka.ui.book_object import BookObject
-from glafka.ui.style import cover_color
+from glafka.ui.book_object import Badge, BookObject
+from glafka.ui.style import EMAILED_ICON, READER_ICON, cover_color
 from glafka.ui.thumbnails import thumbnails
 
 
@@ -142,9 +142,9 @@ def create_book_card(item: BookObject) -> Gtk.Box:
     container.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
 
     cover = cover_widget(book, 140, 200)
-    if item.on_reader:
+    if item.badge is not None:
         overlay = Gtk.Overlay(child=cover)  # the cover sets the size; the badge floats on it
-        overlay.add_overlay(_reader_badge(margin=6))
+        overlay.add_overlay(_status_badge(item.badge, margin=6))
         cover = overlay
     container.append(cover)
 
@@ -193,8 +193,8 @@ def create_book_row(item: BookObject) -> Gtk.Box:
         css_classes=["caption", "accent"],
     )
     row.append(series)
-    badge = _reader_badge(margin=0)
-    badge.set_opacity(1 if item.on_reader else 0)  # keeps the columns aligned either way
+    badge = _status_badge(item.badge or Badge.READER, margin=0)
+    badge.set_opacity(1 if item.badge else 0)  # columns stay aligned
     row.append(badge)
     row.append(
         Gtk.Label(
@@ -207,10 +207,17 @@ def create_book_row(item: BookObject) -> Gtk.Box:
     return row
 
 
-def _reader_badge(margin: int) -> Gtk.Image:
+_BADGES = {
+    Badge.READER: (READER_ICON, "On your reader"),
+    Badge.EMAILED: (EMAILED_ICON, "Emailed, not seen on your reader yet"),
+}
+
+
+def _status_badge(badge: Badge, margin: int) -> Gtk.Image:
+    icon, tooltip = _BADGES[badge]
     return Gtk.Image(
-        icon_name="media-removable-symbolic",
-        tooltip_text="On your reader",
+        icon_name=icon,
+        tooltip_text=tooltip,
         halign=Gtk.Align.END,
         valign=Gtk.Align.START if margin else Gtk.Align.CENTER,
         margin_top=margin,

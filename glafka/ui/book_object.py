@@ -1,6 +1,13 @@
+from enum import Enum
+
 from gi.repository import GObject
 
 from glafka.core.models import Book
+
+
+class Badge(Enum):
+    READER = "reader"  # found on a USB reader at its last check
+    EMAILED = "emailed"  # emailed, not found on a reader since
 
 
 class BookObject(GObject.Object):
@@ -10,10 +17,10 @@ class BookObject(GObject.Object):
     # GTK rebinds a tile only when the item object changes; in-place edits must emit "changed"
     __gsignals__ = {"changed": (GObject.SignalFlags.RUN_FIRST, None, ())}
 
-    def __init__(self, book: Book, on_reader: bool = False) -> None:
+    def __init__(self, book: Book, badge: Badge | None = None) -> None:
         super().__init__()
         self.book = book
-        self.on_reader = on_reader  # on a USB reader at its last check: tiles show a badge
+        self.badge = badge
 
     def update(self, book: Book) -> None:
         self.book = book

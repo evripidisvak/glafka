@@ -204,6 +204,23 @@ CREATE INDEX idx_history_book_id ON history(book_id);
 CREATE INDEX idx_history_at ON history(at);
 """
 
+# v10: books emailed and not yet found on a reader (the mail badge). Past emails count when
+# sent after the reader's last check and not found on it.
+_SCHEMA_V10 = """
+CREATE TABLE email_pending (
+    book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    destination_id TEXT NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+    PRIMARY KEY (book_id, destination_id)
+);
+INSERT INTO email_pending (book_id, destination_id)
+    SELECT DISTINCT h.book_id, h.destination_id FROM history h
+    WHERE h.action = 'sent' AND h.destination_kind = 'email'
+        AND h.book_id IN (SELECT id FROM books)
+        AND h.destination_id IN (SELECT id FROM destinations)
+        AND h.book_id NOT IN (SELECT book_id FROM on_device)
+        AND h.at > COALESCE((SELECT MAX(last_checked) FROM destinations WHERE kind = 'usb'), '');
+"""
+
 MIGRATIONS: list[Migration] = [
     _SCHEMA_V1,
     _migrate_v2,
@@ -214,6 +231,7 @@ MIGRATIONS: list[Migration] = [
     _SCHEMA_V7,
     _SCHEMA_V8,
     _SCHEMA_V9,
+    _SCHEMA_V10,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -675,6 +693,12 @@ class Database:
                 "UPDATE destinations SET last_checked = ? WHERE id = ?",
                 (checked_at.isoformat(), destination_id),
             )
+            # found on the reader: no longer waiting for an emailed copy to arrive
+            self.conn.execute(
+                "DELETE FROM email_pending WHERE book_id IN "
+                "(SELECT book_id FROM on_device WHERE destination_id = ?)",
+                (destination_id,),
+            )
 
     def add_device_copy(self, copy: DeviceCopy) -> None:
         with self.conn:
@@ -683,6 +707,28 @@ class Database:
                 "VALUES (?, ?, ?, ?)",
                 (copy.destination_id, copy.book_id, copy.path, copy.seen_at.isoformat()),
             )
+            self.conn.execute("DELETE FROM email_pending WHERE book_id = ?", (copy.book_id,))
+
+    def set_email_pending(self, book_id: str, destination_id: str) -> None:
+        with self.conn:
+            # SELECT: skipped, not an error, if the destination was deleted while sending
+            self.conn.execute(
+                "INSERT OR IGNORE INTO email_pending (book_id, destination_id) "
+                "SELECT ?, id FROM destinations WHERE id = ?",
+                (book_id, destination_id),
+            )
+
+    def clear_email_pending(self, book_id: str, destination_id: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM email_pending WHERE book_id = ? AND destination_id = ?",
+                (book_id, destination_id),
+            )
+
+    def emails_pending(self) -> set[tuple[str, str]]:
+        """(book id, destination id): emailed there, not found on a reader since."""
+        rows = self.conn.execute("SELECT book_id, destination_id FROM email_pending")
+        return {(book_id, destination_id) for book_id, destination_id in rows}
 
     def remove_device_copies(
         self, destination_id: str, book_id: str, paths: list[str] | None = None

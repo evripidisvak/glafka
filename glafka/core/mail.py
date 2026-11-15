@@ -84,6 +84,7 @@ def send_by_email(
     except (smtplib.SMTPException, OSError) as e:
         raise GlafkaError(f"Could not send through {account.host}: {e}") from e
     record(db, book, destination, HistoryAction.SENT, file=file)
+    db.set_email_pending(book.id, destination.id)  # mail badge until a scan finds it
     return SendResult(SendStatus.SENT, book, file.format)
 
 
